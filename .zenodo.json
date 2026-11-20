@@ -2,7 +2,7 @@
   "title": "PipeShift: research artifact for 'When Data Pipelines Change: A Controlled Evaluation of Silent Errors in LLM-Generated Analytics Code'",
   "upload_type": "software",
   "version": "1.1.0",
-  "license": "MIT",
+  "license": "mit",
   "access_right": "open",
   "creators": [
     {

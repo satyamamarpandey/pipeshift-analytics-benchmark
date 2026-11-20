@@ -2691,15 +2691,15 @@
   },
   {
    "path": "CITATION.cff",
-   "bytes": 1351,
-   "sha256": "cb03d6956d4082ec79c227b71f45f15ac815bc94be0eec96acfaa6bdccb4ac0a",
+   "bytes": 1314,
+   "sha256": "42e3ad734347899f99f6b5c23cb735cbaee44a73d82e32a1c85420be7561392a",
    "private_source_sha256": null,
    "export": "release-candidate edit (see RELEASE_NOTES.md and docs/DEVIATIONS.md item 6)"
   },
   {
    "path": ".zenodo.json",
    "bytes": 1193,
-   "sha256": "d322706b29e73c6066c0851b8b5eed99a6e5e6a26e348a88a79272928dfd10a8",
+   "sha256": "f49d18a70f0f0f16a7e2ab534eebd60b53ace9fd45f19d4a519644438e5a4240",
    "private_source_sha256": null,
    "export": "release-candidate edit (see RELEASE_NOTES.md and docs/DEVIATIONS.md item 6)"
   },

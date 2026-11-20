@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this artifact, please cite the software and the accepted paper."
 title: "PipeShift: benchmark and research artifact for silent errors in LLM-generated analytics code under data-pipeline change"
 version: "1.1.0"
-date-released: "<YYYY-MM-DD: set to the release date at Gate C>"
+date-released: "2026-11-20"
 license: MIT
 authors:
   - family-names: Pandey
