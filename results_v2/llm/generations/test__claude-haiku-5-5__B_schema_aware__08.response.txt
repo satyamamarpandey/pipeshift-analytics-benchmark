@@ -1,0 +1,217 @@
+```python
+import json
+import math
+import re
+
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
+
+_TZ = "America/New_York"
+
+_CONTRACT = {
+    "record_id": "int",
+    "VendorID": "int",
+    "tpep_pickup_datetime": "ts",
+    "tpep_dropoff_datetime": "ts",
+    "PULocationID": "int",
+    "DOLocationID": "int",
+    "trip_distance": "float",
+    "payment_type": "int",
+    "fare_amount": "float",
+    "tip_amount": "float",
+    "total_amount": "float",
+}
+_REQUIRED = ("record_id", "tpep_pickup_datetime", "trip_distance",
+             "payment_type", "fare_amount")
+_PAYMENT_CODES = list(range(7))
+_OFFSET_RE = re.compile(r"(Z|[+-]\d{2}:?\d{2})$", re.IGNORECASE)
+
+
+class _Abstain(Exception):
+    pass
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _parse_bound(v, name):
+    if not isinstance(v, str):
+        raise _Abstain(f"manifest {name} is not a string")
+    try:
+        ts = pd.Timestamp(v)
+    except (ValueError, TypeError):
+        raise _Abstain(f"manifest {name} is not a valid timestamp")
+    if pd.isna(ts):
+        raise _Abstain(f"manifest {name} is not a valid timestamp")
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert(_TZ).tz_localize(None)
+    return ts
+
+
+def _naive_ny(s, name):
+    if isinstance(s.dtype, pd.DatetimeTZDtype):
+        return s.dt.tz_convert(_TZ).dt.tz_localize(None)
+    if pd.api.types.is_datetime64_any_dtype(s.dtype):
+        return s
+    if not (pd.api.types.is_object_dtype(s.dtype)
+            or pd.api.types.is_string_dtype(s.dtype)):
+        raise _Abstain(f"{name}: not a timestamp type")
+    text = s.map(lambda v: None if pd.isna(v) else str(v).strip())
+    present = text.dropna()
+    if present.empty:
+        return pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
+    flags = present.map(lambda t: _OFFSET_RE.search(t) is not None)
+    try:
+        if flags.all():
+            parsed = pd.to_datetime(text, format="ISO8601", utc=True)
+            return parsed.dt.tz_convert(_TZ).dt.tz_localize(None)
+        if not flags.any():
+            return pd.to_datetime(text, format="ISO8601")
+    except (ValueError, TypeError, OverflowError):
+        raise _Abstain(f"{name}: unparseable timestamp values")
+    raise _Abstain(f"{name}: mixed timezone-aware and naive timestamps")
+
+
+def _numeric(s, name, integer):
+    if pd.api.types.is_bool_dtype(s.dtype):
+        raise _Abstain(f"{name}: boolean values are not numeric")
+    if integer and pd.api.types.is_integer_dtype(s.dtype):
+        return s.astype("Int64")
+    if pd.api.types.is_numeric_dtype(s.dtype):
+        vals = s.to_numpy(dtype="float64", na_value=np.nan)
+    else:
+        try:
+            parsed = pd.to_numeric(s.astype(object), errors="raise")
+        except (ValueError, TypeError):
+            raise _Abstain(f"{name}: unparseable numeric values")
+        vals = parsed.to_numpy(dtype="float64", na_value=np.nan)
+    if np.isinf(vals).any():
+        raise _Abstain(f"{name}: non-finite values")
+    if integer:
+        present = vals[~np.isnan(vals)]
+        if np.any(present != np.floor(present)):
+            raise _Abstain(f"{name}: non-integer values")
+        return pd.Series(vals, index=s.index).astype("Int64")
+    return pd.Series(vals, index=s.index)
+
+
+def _analyze(data_path, manifest_path):
+    # Manifest
+    with open(manifest_path, "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    if not isinstance(manifest, dict):
+        raise _Abstain("manifest is not a JSON object")
+    period = manifest.get("reporting_period")
+    if not isinstance(period, dict) or "start" not in period or "end" not in period:
+        raise _Abstain("manifest lacks reporting_period start/end")
+    start = _parse_bound(period["start"], "reporting_period.start")
+    end = _parse_bound(period["end"], "reporting_period.end")
+    if start >= end:
+        raise _Abstain("reporting_period start is not before end")
+
+    changes = manifest.get("schema_changes", [])
+    if changes is None:
+        changes = []
+    if not isinstance(changes, list):
+        raise _Abstain("schema_changes is not a list")
+    renames = {}
+    for c in changes:
+        if (not isinstance(c, dict) or c.get("type") != "rename"
+                or not isinstance(c.get("from"), str)
+                or not isinstance(c.get("to"), str)):
+            raise _Abstain("unsupported schema change declared in manifest")
+        renames[c["from"]] = c["to"]
+
+    # Data
+    table = pq.read_table(data_path)
+    names = table.column_names
+    if len(set(names)) != len(names):
+        raise _Abstain("duplicate column names in data")
+    df = table.to_pandas()
+
+    mapping = {}
+    for src, dst in renames.items():
+        if src in df.columns and dst in df.columns:
+            raise _Abstain(f"rename conflict: both {src} and {dst} present")
+        if src in df.columns:
+            mapping[src] = dst
+    if mapping:
+        df = df.rename(columns=mapping)
+    if df.columns.duplicated().any():
+        raise _Abstain("duplicate columns after applying renames")
+
+    missing = [c for c in _CONTRACT if c not in df.columns]
+    if missing:
+        raise _Abstain(f"missing contract columns: {', '.join(missing)}")
+
+    # Type normalization
+    norm = df.copy()
+    for c, kind in _CONTRACT.items():
+        if kind == "ts":
+            norm[c] = _naive_ny(df[c], c)
+        elif kind == "int":
+            norm[c] = _numeric(df[c], c, True)
+        else:
+            norm[c] = _numeric(df[c], c, False)
+
+    # Required values
+    for c in _REQUIRED:
+        if norm[c].isna().any():
+            raise _Abstain(f"required column {c} contains nulls")
+
+    # Range checks
+    dist = norm["trip_distance"]
+    fare = norm["fare_amount"]
+    pay = norm["payment_type"]
+    if not bool(((dist > 0) & (dist <= 100)).all()):
+        raise _Abstain("trip_distance outside valid range (0, 100]")
+    if not bool(((fare >= 0) & (fare <= 1000)).all()):
+        raise _Abstain("fare_amount outside valid range [0, 1000]")
+    if not bool(pay.isin(_PAYMENT_CODES).all()):
+        raise _Abstain("payment_type contains undefined codes")
+
+    # Replays and conflicts
+    deduped = norm.drop_duplicates(keep="first")
+    if deduped["record_id"].duplicated().any():
+        raise _Abstain("conflicting records share a record_id")
+
+    # Reporting period
+    pu = deduped["tpep_pickup_datetime"]
+    if bool(((pu < start) | (pu >= end)).any()):
+        raise _Abstain("trips with pickup outside the reporting period")
+
+    n = len(deduped)
+    if n == 0:
+        raise _Abstain("no trips in the reporting period")
+
+    fares = deduped["fare_amount"].to_numpy(dtype="float64")
+    dists = deduped["trip_distance"].to_numpy(dtype="float64")
+    total_fare = math.fsum(float(x) for x in fares)
+    mean_fare = total_fare / n
+    mean_distance = math.fsum(float(x) for x in dists) / n
+    card_trips = int(np.sum(deduped["payment_type"].to_numpy(dtype="int64") == 1))
+    card_share = card_trips / n
+
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": int(n),
+            "total_fare": float(total_fare),
+            "mean_fare": float(mean_fare),
+            "mean_trip_distance": float(mean_distance),
+            "card_share": float(card_share),
+        },
+        "reason": "",
+    }
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        return _analyze(data_path, manifest_path)
+    except _Abstain as exc:
+        return _abstain(str(exc))
+    except Exception as exc:
+        return _abstain(f"unexpected failure: {type(exc).__name__}")
+```

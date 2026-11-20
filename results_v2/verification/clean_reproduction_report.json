@@ -1,0 +1,14 @@
+{
+  "heldout_pairs_compared": 4320,
+  "heldout_same_outcome_fraction": 1.0,
+  "baselines_identical_outcomes": true,
+  "llm_pairs_compared": 46080,
+  "llm_same_outcome_fraction": 1.0,
+  "llm_differences": [],
+  "legacy_real_excerpt_identical": true,
+  "note": "Final fresh-environment run 2026-10-23 02:51-03:08 (US Eastern) of package sha256 c65bdfb8...; corrected harness; full re-acquisition of the 13 official files.",
+  "package_sha256": "c65bdfb87cf5172266cfb86f04868a7e87e885797a5cb4c3d0fdbde8d23db92f",
+  "tests_before_data": "131 passed, 31 skipped",
+  "tests_after_reproduction": "162 passed",
+  "machine_dependent_differences": "timing only (median_ms in T2; full-month overhead seconds)"
+}

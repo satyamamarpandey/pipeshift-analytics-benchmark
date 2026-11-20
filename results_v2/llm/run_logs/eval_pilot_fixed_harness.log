@@ -1,0 +1,13 @@
+12 generations x 32 episodes to evaluate
+[1/12] pilot__claude-haiku-5-5__A_unassisted__00: {'correct_abstention': 14, 'correct_recovery': 7, 'false_rejection': 5, 'silent_error': 5, 'unverified_accept': 1}  (2s)
+[2/12] pilot__claude-haiku-5-5__B_schema_aware__00: {'correct_recovery': 11, 'correct_abstention': 11, 'silent_error': 6, 'unverified_accept': 3, 'false_rejection': 1}  (2s)
+[3/12] pilot__claude-haiku-5-5__C_provenance_guided__00: {'correct_abstention': 18, 'correct_recovery': 10, 'false_rejection': 2, 'silent_error': 2}  (2s)
+[4/12] pilot__claude-opus-5-5__A_unassisted__00: {'correct_abstention': 15, 'correct_recovery': 10, 'silent_error': 4, 'false_rejection': 2, 'unverified_accept': 1}  (2s)
+[5/12] pilot__claude-opus-5-5__B_schema_aware__00: {'correct_abstention': 14, 'correct_recovery': 12, 'silent_error': 4, 'unverified_accept': 2}  (3s)
+[6/12] pilot__claude-opus-5-5__C_provenance_guided__00: {'correct_abstention': 18, 'correct_recovery': 12, 'silent_error': 2}  (3s)
+[7/12] pilot__claude-sonnet-5-5__A_unassisted__00: {'correct_abstention': 11, 'correct_recovery': 9, 'silent_error': 7, 'false_rejection': 3, 'unverified_accept': 2}  (3s)
+[8/12] pilot__claude-sonnet-5-5__B_schema_aware__00: {'correct_abstention': 12, 'correct_recovery': 9, 'silent_error': 5, 'false_rejection': 3, 'unverified_accept': 3}  (3s)
+[9/12] pilot__claude-sonnet-5-5__C_provenance_guided__00: {'correct_abstention': 18, 'correct_recovery': 9, 'false_rejection': 3, 'silent_error': 2}  (3s)
+[10/12] pilot__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__00: {'silent_error': 13, 'correct_recovery': 8, 'unverified_accept': 5, 'correct_abstention': 3, 'false_rejection': 3}  (3s)
+[11/12] pilot__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__00: {'correct_abstention': 20, 'false_rejection': 12}  (4s)
+[12/12] pilot__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__00: {'correct_abstention': 20, 'false_rejection': 12}  (4s)

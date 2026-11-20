@@ -1,0 +1,304 @@
+"""NYC yellow taxi monthly summary with data-contract verification.
+
+analyze(data_path, manifest_path) verifies the manifest, the data file bytes,
+row count, schema, reporting period, and data-contract rules before computing
+metrics. Any failed check yields an abstain result with a reason.
+"""
+
+import hashlib
+import io
+import json
+import math
+import os
+import warnings
+
+import pandas as pd
+import pyarrow.parquet as pq
+
+NY_TZ = "America/New_York"
+REQUIRED_COLUMNS = (
+    "record_id",
+    "tpep_pickup_datetime",
+    "trip_distance",
+    "payment_type",
+    "fare_amount",
+)
+CONTRACT_KINDS = {
+    "record_id": "int",
+    "VendorID": "int",
+    "tpep_pickup_datetime": "datetime",
+    "tpep_dropoff_datetime": "datetime",
+    "PULocationID": "int",
+    "DOLocationID": "int",
+    "trip_distance": "float",
+    "payment_type": "int",
+    "fare_amount": "float",
+    "tip_amount": "float",
+    "total_amount": "float",
+}
+VALID_PAYMENT_TYPES = list(range(7))  # 0..6 documented codes
+MANIFEST_KEYS = (
+    "dataset",
+    "snapshot_id",
+    "snapshot_version",
+    "reporting_period",
+    "file",
+    "file_sha256",
+    "row_count",
+    "columns",
+    "units",
+    "schema_changes",
+    "description",
+)
+
+
+class _Abstain(Exception):
+    """Raised when a verification step fails; the message is the reason."""
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _load_manifest(manifest_path):
+    if not os.path.isfile(manifest_path):
+        raise _Abstain("manifest file does not exist")
+    try:
+        with open(manifest_path, "rb") as fh:
+            raw = fh.read()
+        manifest = json.loads(raw)
+    except (OSError, ValueError):
+        raise _Abstain("manifest is not valid JSON")
+
+    if not isinstance(manifest, dict):
+        raise _Abstain("manifest root is not a JSON object")
+    missing = [k for k in MANIFEST_KEYS if k not in manifest]
+    if missing:
+        raise _Abstain("manifest missing fields: " + ", ".join(missing))
+
+    rp = manifest["reporting_period"]
+    if not isinstance(rp, dict) or not all(
+        isinstance(rp.get(k), str) for k in ("start", "end", "timezone")
+    ):
+        raise _Abstain("manifest reporting_period must have string start, end, timezone")
+    if not isinstance(manifest["file_sha256"], str):
+        raise _Abstain("manifest file_sha256 is not a string")
+    rc = manifest["row_count"]
+    if isinstance(rc, bool) or not isinstance(rc, int) or rc < 0:
+        raise _Abstain("manifest row_count is not a non-negative integer")
+    cols = manifest["columns"]
+    if not isinstance(cols, list) or not all(
+        isinstance(c, dict) and isinstance(c.get("name"), str) and isinstance(c.get("type"), str)
+        for c in cols
+    ):
+        raise _Abstain("manifest columns must be a list of {name, type} objects")
+    if not isinstance(manifest["schema_changes"], list):
+        raise _Abstain("manifest schema_changes must be a list")
+    return manifest
+
+
+def _check_units(units):
+    mapping = {}
+    if isinstance(units, dict):
+        mapping = {str(k): v for k, v in units.items()}
+    elif isinstance(units, list):
+        for entry in units:
+            if isinstance(entry, dict):
+                key = entry.get("column", entry.get("name"))
+                val = entry.get("unit", entry.get("units"))
+                if isinstance(key, str):
+                    mapping[key] = val
+    else:
+        raise _Abstain("manifest units missing or malformed")
+
+    expectations = {"fare_amount": "usd", "trip_distance": "mile"}
+    for col, token in expectations.items():
+        if col in mapping and token not in str(mapping[col]).lower():
+            raise _Abstain(f"declared unit for {col} is not {token}")
+
+
+def _reconcile_schema(table, manifest):
+    names = list(table.column_names)
+    if len(set(names)) != len(names):
+        raise _Abstain("duplicate column names in data file")
+
+    rename = {}
+    for change in manifest["schema_changes"]:
+        if (
+            not isinstance(change, dict)
+            or change.get("type") != "rename"
+            or not isinstance(change.get("from"), str)
+            or not isinstance(change.get("to"), str)
+        ):
+            raise _Abstain("unsupported schema_changes entry")
+        if change["from"] in rename:
+            raise _Abstain("conflicting renames in schema_changes")
+        rename[change["from"]] = change["to"]
+
+    present = set(names)
+    for src in rename:
+        if src not in present:
+            raise _Abstain(f"renamed source column {src!r} not present in data")
+
+    new_names = [rename.get(n, n) for n in names]
+    if len(set(new_names)) != len(new_names):
+        raise _Abstain("schema_changes produce duplicate column names")
+
+    declared = [c["name"] for c in manifest["columns"]]
+    if len(set(declared)) != len(declared):
+        raise _Abstain("manifest declares duplicate column names")
+    if set(new_names) != set(declared):
+        raise _Abstain("delivered columns do not match manifest columns after schema_changes")
+
+    missing_contract = [c for c in CONTRACT_KINDS if c not in set(new_names)]
+    if missing_contract:
+        raise _Abstain("data missing contract columns: " + ", ".join(missing_contract))
+    return new_names
+
+
+def _normalize_int(series, name):
+    num = pd.to_numeric(series, errors="coerce")
+    if (num.isna() & series.notna()).any():
+        raise _Abstain(f"{name} contains non-numeric values")
+    vals = num.dropna()
+    if len(vals) and not ((vals % 1) == 0).all():
+        raise _Abstain(f"{name} contains non-integral values")
+    return num.astype("Int64")
+
+
+def _normalize_float(series, name):
+    num = pd.to_numeric(series, errors="coerce").astype("float64")
+    if (num.isna() & series.notna()).any():
+        raise _Abstain(f"{name} contains non-numeric values")
+    if (num.abs() == math.inf).any():
+        raise _Abstain(f"{name} contains infinite values")
+    return num
+
+
+def _normalize_datetime(series, name):
+    if isinstance(series.dtype, pd.DatetimeTZDtype) or pd.api.types.is_datetime64_any_dtype(
+        series.dtype
+    ):
+        ts = series
+    else:
+        ts = pd.to_datetime(series, errors="coerce", format="ISO8601")
+    if isinstance(ts.dtype, pd.DatetimeTZDtype):
+        ts = ts.dt.tz_convert(NY_TZ).dt.tz_localize(None)
+    elif not pd.api.types.is_datetime64_any_dtype(ts.dtype):
+        raise _Abstain(f"{name} has unparseable or mixed-offset timestamps")
+    if (ts.isna() & series.notna()).any():
+        raise _Abstain(f"{name} contains unparseable timestamps")
+    return ts
+
+
+def _normalize(df):
+    out = df.copy()
+    for col, kind in CONTRACT_KINDS.items():
+        if kind == "int":
+            out[col] = _normalize_int(df[col], col)
+        elif kind == "float":
+            out[col] = _normalize_float(df[col], col)
+        else:
+            out[col] = _normalize_datetime(df[col], col)
+    return out
+
+
+def _to_naive_local(text):
+    ts = pd.Timestamp(text)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert(NY_TZ).tz_localize(None)
+    return ts
+
+
+def _analyze(data_path, manifest_path):
+    # Step 1: manifest
+    manifest = _load_manifest(manifest_path)
+    rp = manifest["reporting_period"]
+    if rp["timezone"].strip().lower() != NY_TZ.lower():
+        raise _Abstain("reporting_period timezone must be America/New_York")
+    _check_units(manifest["units"])
+
+    # Step 2: file bytes hash
+    if not os.path.isfile(data_path):
+        raise _Abstain("data file does not exist")
+    with open(data_path, "rb") as fh:
+        raw = fh.read()
+    if hashlib.sha256(raw).hexdigest() != manifest["file_sha256"].strip().lower():
+        raise _Abstain("SHA-256 of data file does not match file_sha256")
+
+    # Step 3: row count
+    try:
+        table = pq.read_table(io.BytesIO(raw))
+    except Exception:
+        raise _Abstain("data file is not readable Parquet")
+    if table.num_rows != manifest["row_count"]:
+        raise _Abstain("row count does not match manifest row_count")
+
+    # Step 4: schema
+    new_names = _reconcile_schema(table, manifest)
+    df = table.rename_columns(new_names).to_pandas()
+
+    # Step 6 (type normalization and contract checks), needed before period check
+    df = _normalize(df)
+    for col in REQUIRED_COLUMNS:
+        if df[col].isna().any():
+            raise _Abstain(f"required field {col} contains nulls")
+
+    # Step 5: reporting period on every pickup (start inclusive, end exclusive)
+    pickups = df["tpep_pickup_datetime"]
+    start = _to_naive_local(rp["start"])
+    end = _to_naive_local(rp["end"])
+    if start >= end:
+        raise _Abstain("reporting_period start is not before end")
+    if ((pickups < start) | (pickups >= end)).any():
+        raise _Abstain("pickup timestamp outside reporting_period")
+
+    # Step 6: value rules
+    dist = df["trip_distance"].astype("float64")
+    if not ((dist > 0) & (dist <= 100)).all():
+        raise _Abstain("trip_distance outside valid range (0, 100]")
+    fare = df["fare_amount"].astype("float64")
+    if not ((fare >= 0) & (fare <= 1000)).all():
+        raise _Abstain("fare_amount outside valid range [0, 1000]")
+    if not df["payment_type"].isin(VALID_PAYMENT_TYPES).all():
+        raise _Abstain("payment_type contains undocumented codes")
+
+    # Step 6: replays (identical rows count once) and conflicts (same id, different values)
+    dedup = df.drop_duplicates()
+    if dedup["record_id"].duplicated().any():
+        raise _Abstain("conflicting records share the same record_id")
+
+    n = len(dedup)
+    if n == 0:
+        raise _Abstain("no trips in reporting period")
+
+    fares = [float(x) for x in dedup["fare_amount"]]
+    dists = [float(x) for x in dedup["trip_distance"]]
+    total_fare = math.fsum(fares)
+    mean_fare = total_fare / n
+    mean_trip_distance = math.fsum(dists) / n
+    card_trips = int((dedup["payment_type"].astype("int64") == 1).sum())
+    card_share = card_trips / n
+
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": n,
+            "total_fare": total_fare,
+            "mean_fare": mean_fare,
+            "mean_trip_distance": mean_trip_distance,
+            "card_share": card_share,
+        },
+        "reason": "",
+    }
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return _analyze(str(data_path), str(manifest_path))
+    except _Abstain as exc:
+        return _abstain(str(exc))
+    except Exception as exc:
+        return _abstain(f"could not verify or process inputs ({type(exc).__name__})")

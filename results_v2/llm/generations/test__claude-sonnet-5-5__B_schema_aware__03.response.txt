@@ -1,0 +1,202 @@
+```python
+import json
+import math
+
+import numpy as np
+import pandas as pd
+
+
+REQUIRED = ["record_id", "tpep_pickup_datetime", "trip_distance",
+            "payment_type", "fare_amount"]
+CONTRACT_COLS = ["record_id", "VendorID", "tpep_pickup_datetime",
+                 "tpep_dropoff_datetime", "PULocationID", "DOLocationID",
+                 "trip_distance", "payment_type", "fare_amount",
+                 "tip_amount", "total_amount"]
+NY = "America/New_York"
+
+
+class Abstain(Exception):
+    pass
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": str(reason)[:300]}
+
+
+def _to_local_naive(values, what):
+    """Parse to naive New York local datetime64."""
+    s = pd.Series(values)
+    if isinstance(s.dtype, pd.DatetimeTZDtype):
+        return s.dt.tz_convert(NY).dt.tz_localize(None)
+    if pd.api.types.is_datetime64_dtype(s.dtype):
+        return s
+    try:
+        out = pd.to_datetime(s)
+        if isinstance(out.dtype, pd.DatetimeTZDtype):
+            out = out.dt.tz_convert(NY).dt.tz_localize(None)
+        return out
+    except Exception:
+        pass
+    try:
+        out = pd.to_datetime(s, utc=True)
+        return out.dt.tz_convert(NY).dt.tz_localize(None)
+    except Exception:
+        raise Abstain(f"cannot parse datetime column {what}")
+
+
+def _to_numeric(series, name):
+    try:
+        out = pd.to_numeric(series, errors="raise")
+    except Exception:
+        raise Abstain(f"non-numeric values in {name}")
+    if pd.api.types.is_bool_dtype(out.dtype):
+        out = out.astype("int64")
+    out = out.astype("float64") if not pd.api.types.is_integer_dtype(out.dtype) else out
+    return out
+
+
+def _parse_period(manifest):
+    rp = manifest.get("reporting_period")
+    if rp is None:
+        raise Abstain("manifest lacks reporting_period")
+    start = end = None
+    if isinstance(rp, dict):
+        for k in ("start", "begin", "from", "start_date"):
+            if k in rp:
+                start = rp[k]
+                break
+        for k in ("end", "to", "stop", "end_date"):
+            if k in rp:
+                end = rp[k]
+                break
+    elif isinstance(rp, (list, tuple)) and len(rp) == 2:
+        start, end = rp
+    if start is None or end is None:
+        raise Abstain("unrecognized reporting_period format")
+    try:
+        def conv(x):
+            t = pd.Timestamp(x)
+            if t.tzinfo is not None:
+                t = t.tz_convert(NY).tz_localize(None)
+            return t
+        s, e = conv(start), conv(end)
+    except Exception:
+        raise Abstain("cannot parse reporting_period")
+    if not s < e:
+        raise Abstain("invalid reporting_period")
+    return s, e
+
+
+def _analyze(data_path, manifest_path):
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception:
+        raise Abstain("cannot read manifest")
+    if not isinstance(manifest, dict):
+        raise Abstain("manifest is not an object")
+
+    start, end = _parse_period(manifest)
+
+    try:
+        df = pd.read_parquet(data_path)
+    except Exception:
+        raise Abstain("cannot read parquet data")
+
+    # Renames
+    changes = manifest.get("schema_changes") or []
+    if not isinstance(changes, list):
+        raise Abstain("malformed schema_changes")
+    for ch in changes:
+        if not isinstance(ch, dict) or ch.get("type") != "rename":
+            continue
+        old, new = ch.get("from"), ch.get("to")
+        if old is None or new is None:
+            continue
+        if old in df.columns and new not in df.columns:
+            df = df.rename(columns={old: new})
+        elif old in df.columns and new in df.columns and old != new:
+            df = df.drop(columns=[old])
+
+    if df.columns.duplicated().any():
+        raise Abstain("duplicate column names")
+
+    missing = [c for c in REQUIRED if c not in df.columns]
+    if missing:
+        raise Abstain(f"missing required columns: {missing}")
+
+    cols = [c for c in CONTRACT_COLS if c in df.columns]
+    df = df[cols].copy()
+
+    # Type normalization
+    for c in ("tpep_pickup_datetime", "tpep_dropoff_datetime"):
+        if c in df.columns:
+            df[c] = _to_local_naive(df[c].reset_index(drop=True), c).values
+    for c in cols:
+        if c in ("tpep_pickup_datetime", "tpep_dropoff_datetime"):
+            continue
+        df[c] = _to_numeric(df[c], c).values
+
+    # Nulls in required columns
+    if df[REQUIRED].isna().any().any():
+        raise Abstain("null values in required columns")
+
+    # Finite checks
+    for c in ("trip_distance", "fare_amount"):
+        if not np.isfinite(df[c].to_numpy(dtype="float64")).all():
+            raise Abstain(f"non-finite values in {c}")
+
+    rid = df["record_id"]
+    if not (rid == np.floor(rid)).all():
+        raise Abstain("non-integral record_id")
+    pt = df["payment_type"]
+    if not (pt == np.floor(pt)).all() or not pt.isin([0, 1, 2, 3, 4, 5, 6]).all():
+        raise Abstain("invalid payment_type codes")
+
+    # Replays / conflicts
+    df = df.drop_duplicates().reset_index(drop=True)
+    if df["record_id"].duplicated().any():
+        raise Abstain("conflicting duplicate record_id values")
+
+    if len(df) == 0:
+        raise Abstain("no trips in data")
+
+    # Range checks
+    d = df["trip_distance"]
+    if not ((d > 0) & (d <= 100)).all():
+        raise Abstain("trip_distance outside valid range")
+    f = df["fare_amount"]
+    if not ((f >= 0) & (f <= 1000)).all():
+        raise Abstain("fare_amount outside valid range")
+
+    pu = df["tpep_pickup_datetime"]
+    if not ((pu >= start) & (pu < end)).all():
+        raise Abstain("pickup times outside reporting period")
+
+    n = int(len(df))
+    total_fare = math.fsum(f.to_numpy(dtype="float64").tolist())
+    mean_fare = total_fare / n
+    mean_dist = math.fsum(d.to_numpy(dtype="float64").tolist()) / n
+    card_share = float((df["payment_type"] == 1).sum()) / n
+
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": n,
+            "total_fare": float(total_fare),
+            "mean_fare": float(mean_fare),
+            "mean_trip_distance": float(mean_dist),
+            "card_share": float(card_share),
+        },
+        "reason": "",
+    }
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        return _analyze(data_path, manifest_path)
+    except Abstain as e:
+        return _abstain(e)
+    except Exception as e:
+        return _abstain(f"unexpected error: {type(e).__name__}")
+```

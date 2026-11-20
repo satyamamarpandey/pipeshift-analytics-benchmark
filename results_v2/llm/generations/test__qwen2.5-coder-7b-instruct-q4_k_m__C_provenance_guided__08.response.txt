@@ -1,0 +1,77 @@
+```python
+import json
+import pandas as pd
+from pyarrow.parquet import read_table
+from datetime import datetime, timedelta
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Load manifest
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+        
+        # Verify manifest
+        if not all(key in manifest for key in ['dataset', 'snapshot_id', 'snapshot_version', 'reporting_period', 'file', 'file_sha256', 'row_count', 'columns', 'units', 'schema_changes', 'description']):
+            return {"status": "abstain", "metrics": None, "reason": "Invalid manifest file"}
+        
+        # Load data
+        table = read_table(data_path)
+        data = table.to_pandas()
+        
+        # Verify SHA-256
+        file_sha256 = data_path.split('/')[-1]
+        if file_sha256 != manifest['file_sha256']:
+            return {"status": "abstain", "metrics": None, "reason": "SHA-256 mismatch"}
+        
+        # Verify row count
+        if data.shape[0] != manifest['row_count']:
+            return {"status": "abstain", "metrics": None, "reason": "Incorrect row count"}
+        
+        # Apply schema changes
+        for change in manifest['schema_changes']:
+            if change['type'] == 'rename':
+                data.rename(columns={change['from']: change['to']}, inplace=True)
+        
+        # Verify columns
+        for column in manifest['columns']:
+            if column['name'] not in data.columns or data[column['name']].dtype != column['type']:
+                return {"status": "abstain", "metrics": None, "reason": "Incorrect column or type"}
+        
+        # Verify timestamps
+        reporting_start = datetime.strptime(manifest['reporting_period']['start'], "%Y-%m-%d %H:%M:%S")
+        reporting_end = datetime.strptime(manifest['reporting_period']['end'], "%Y-%m-%d %H:%M:%S") + timedelta(days=1)
+        if not (reporting_start <= data['tpep_pickup_datetime'].min() < reporting_end):
+            return {"status": "abstain", "metrics": None, "reason": "Pickup timestamp out of reporting period"}
+        
+        # Verify required fields
+        required_fields = ['record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount']
+        if not all(field in data.columns for field in required_fields):
+            return {"status": "abstain", "metrics": None, "reason": "Missing required field"}
+        
+        # Remove duplicates
+        data.drop_duplicates(subset=required_fields, keep='first', inplace=True)
+        
+        # Verify non-null values
+        if data[required_fields].isnull().any().any():
+            return {"status": "abstain", "metrics": None, "reason": "Null value in required field"}
+        
+        # Verify value ranges
+        if data['trip_distance'].min() <= 0 or data['trip_distance'].max() > 100:
+            return {"status": "abstain", "metrics": None, "reason": "Invalid trip distance"}
+        if data['fare_amount'].min() < 0 or data['fare_amount'].max() > 1000:
+            return {"status": "abstain", "metrics": None, "reason": "Invalid fare amount"}
+        
+        # Compute metrics
+        metrics = {
+            "trip_count": data.shape[0],
+            "total_fare": data['fare_amount'].sum(),
+            "mean_fare": data['fare_amount'].mean(),
+            "mean_trip_distance": data['trip_distance'].mean(),
+            "card_share": data[data['payment_type'] == 1].shape[0] / data.shape[0]
+        }
+        
+        return {"status": "ok", "metrics": metrics, "reason": ""}
+    
+    except Exception as e:
+        return {"status": "abstain", "metrics": None, "reason": str(e)}
+```

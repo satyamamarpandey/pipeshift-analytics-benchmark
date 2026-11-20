@@ -1,0 +1,37 @@
+```python
+import pandas as pd
+import pyarrow as pa
+from pyarrow.parquet import read_table
+import numpy as np
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Read the Parquet file
+        table = read_table(data_path)
+        df = table.to_pandas()
+        
+        # Calculate the metrics
+        trip_count = len(df)
+        total_fare = df['fare_amount'].sum()
+        mean_fare = df['fare_amount'].mean()
+        mean_trip_distance = df['trip_distance'].mean()
+        card_share = (df['payment_type'] == 1).mean()  # 1 represents credit card in the NYC TLC data
+        
+        return {
+            "status": "ok",
+            "metrics": {
+                "trip_count": trip_count,
+                "total_fare": total_fare,
+                "mean_fare": mean_fare,
+                "mean_trip_distance": mean_trip_distance,
+                "card_share": card_share
+            },
+            "reason": ""
+        }
+    except Exception as e:
+        return {
+            "status": "abstain",
+            "metrics": None,
+            "reason": str(e)
+        }
+```

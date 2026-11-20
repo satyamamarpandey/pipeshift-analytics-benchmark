@@ -1,0 +1,2 @@
+0.22.339.794 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 8192, kv_unified = 'true'
+llama.cpp release b11829 (win-vulkan-x64), device Vulkan1 NVIDIA RTX 4050 Laptop; source https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF (qwen2.5-coder-7b-instruct-q4_k_m.gguf), license Apache-2.0

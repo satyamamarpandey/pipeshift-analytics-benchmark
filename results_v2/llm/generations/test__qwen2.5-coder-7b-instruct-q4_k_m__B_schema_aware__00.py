@@ -1,0 +1,47 @@
+import pandas as pd
+import pyarrow as pa
+from pyarrow.parquet import read_table
+import numpy as np
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    # Read the manifest to get the schema and reporting period
+    with open(manifest_path, 'r') as f:
+        manifest = pd.read_json(f)
+    reporting_start = pd.to_datetime(manifest['reporting_period']['start'], utc=True).tz_convert('America/New_York')
+    reporting_end = pd.to_datetime(manifest['reporting_period']['end'], utc=True).tz_convert('America/New_York')
+
+    # Read the Parquet file
+    table = read_table(data_path)
+    df = table.to_pandas()
+
+    # Validate the data
+    required_columns = ['record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount']
+    if not all(col in df.columns for col in required_columns):
+        return {"status": "abstain", "metrics": None, "reason": "Missing required columns"}
+
+    if df.isnull().any().any():
+        return {"status": "abstain", "metrics": None, "reason": "Null values found"}
+
+    if (df['trip_distance'] <= 0) | (df['trip_distance'] > 100):
+        return {"status": "abstain", "metrics": None, "reason": "Invalid trip_distance values"}
+
+    if (df['fare_amount'] < 0) | (df['fare_amount'] > 1000):
+        return {"status": "abstain", "metrics": None, "reason": "Invalid fare_amount values"}
+
+    # Filter trips within the reporting period
+    df['tpep_pickup_datetime'] = pd.to_datetime(df['tpep_pickup_datetime'], utc=True).dt.tz_convert('America/New_York')
+    df = df[(df['tpep_pickup_datetime'] >= reporting_start) & (df['tpep_pickup_datetime'] < reporting_end)]
+
+    # Remove duplicate records
+    df = df.drop_duplicates()
+
+    # Calculate metrics
+    metrics = {
+        "trip_count": df.shape[0],
+        "total_fare": df['fare_amount'].sum(),
+        "mean_fare": df['fare_amount'].mean(),
+        "mean_trip_distance": df['trip_distance'].mean(),
+        "card_share": (df['payment_type'] == 1).mean()
+    }
+
+    return {"status": "ok", "metrics": metrics, "reason": ""}

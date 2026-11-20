@@ -1,0 +1,24 @@
+{
+  "title": "PipeShift: research artifact for 'When Data Pipelines Change: A Controlled Evaluation of Silent Errors in LLM-Generated Analytics Code'",
+  "upload_type": "software",
+  "version": "1.1.0",
+  "license": "MIT",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Pandey, Satyam Adharchandra",
+      "affiliation": "Independent Researcher",
+      "orcid": "0009-0002-9127-6960"
+    }
+  ],
+  "description": "Benchmark code, 32 primary and 3 exploratory held-out fault scenarios, frozen prompts and configurations, 120 generations (119 generated programs and 120 responses), deterministic validators, episode-level results, tables, figures and reproduction scripts. NYC TLC source data are not redistributed; scripts download them with SHA-256 checks. Model outputs are research data subject to the model providers' terms. Re-execution of archived programs is not fresh model sampling.",
+  "keywords": [
+    "LLM-generated code",
+    "silent errors",
+    "data validation",
+    "data provenance",
+    "reproducibility",
+    "benchmark"
+  ],
+  "notes": "Companion to a paper accepted at TrustAI-BD 2026 (IEEE BigData 2026 workshop); proceedings record not yet available."
+}

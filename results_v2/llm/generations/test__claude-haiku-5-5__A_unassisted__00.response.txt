@@ -1,0 +1,157 @@
+```python
+import hashlib
+import json
+import math
+import re
+
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+
+_REQUIRED_COLUMNS = [
+    "record_id",
+    "tpep_pickup_datetime",
+    "tpep_dropoff_datetime",
+    "trip_distance",
+    "payment_type",
+    "fare_amount",
+]
+_CREDIT_CARD = 1
+_VALID_PAYMENT_TYPES = [1, 2, 3, 4, 5, 6]  # TLC payment_type codes
+_SHA_KEYS = {"sha256", "sha_256", "checksum_sha256", "sha256_checksum"}
+_ROW_KEYS = {"row_count", "num_rows", "record_count", "rows", "num_records"}
+_HEX64 = re.compile(r"^[0-9a-fA-F]{64}$")
+_CHUNK = 1 << 20
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _find_key(obj, names):
+    """Return the first scalar value stored under any of `names` (case-insensitive), else None."""
+    stack = [obj]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            for key, value in cur.items():
+                if isinstance(key, str) and key.lower() in names and not isinstance(value, (dict, list)):
+                    return value
+            stack.extend(v for v in cur.values() if isinstance(v, (dict, list)))
+        elif isinstance(cur, list):
+            stack.extend(v for v in cur if isinstance(v, (dict, list)))
+    return None
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _analyze(data_path, manifest_path):
+    # 1. Manifest must be readable and must pin the data file by checksum.
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        return _abstain("manifest is missing or not valid JSON")
+
+    digest = _find_key(manifest, _SHA_KEYS)
+    if not isinstance(digest, str) or not _HEX64.match(digest):
+        return _abstain("manifest provides no valid sha256 checksum for the data file")
+    try:
+        actual = _sha256(data_path)
+    except OSError:
+        return _abstain("data file is missing or unreadable")
+    if actual.lower() != digest.lower():
+        return _abstain("data file checksum does not match manifest")
+
+    expected_rows = _find_key(manifest, _ROW_KEYS)
+    if expected_rows is not None and (isinstance(expected_rows, bool) or not isinstance(expected_rows, int)):
+        return _abstain("manifest row count is malformed")
+
+    # 2. Schema check.
+    try:
+        pf = pq.ParquetFile(data_path)
+    except (OSError, pa.ArrowException):
+        return _abstain("data file is not a readable Parquet file")
+    available = set(pf.schema_arrow.names)
+    missing = [c for c in _REQUIRED_COLUMNS if c not in available]
+    if missing:
+        return _abstain("missing required columns: " + ", ".join(missing))
+
+    table = pf.read(columns=_REQUIRED_COLUMNS)
+    n = table.num_rows
+    if n == 0:
+        return _abstain("data contains no trips")
+    if expected_rows is not None and expected_rows != n:
+        return _abstain("row count does not match manifest")
+
+    # 3. Completeness and uniqueness.
+    for name in _REQUIRED_COLUMNS:
+        if table.column(name).null_count > 0:
+            return _abstain(f"column {name} contains nulls")
+
+    record_ids = table.column("record_id").combine_chunks()
+    if pc.count_distinct(record_ids).as_py() != n:
+        return _abstain("record_id is not unique; trip counts would be ambiguous")
+
+    # 4. Type and domain checks for metric columns.
+    pay_raw = table.column("payment_type").combine_chunks()
+    if not (pa.types.is_integer(pay_raw.type) or pa.types.is_floating(pay_raw.type)):
+        return _abstain("payment_type is not numeric")
+    try:
+        pay_arr = pay_raw.cast(pa.int64())
+    except pa.ArrowException:
+        return _abstain("payment_type contains non-integral values")
+    valid = pc.is_in(pay_arr, value_set=pa.array(_VALID_PAYMENT_TYPES, type=pa.int64()))
+    if not pc.all(valid).as_py():
+        return _abstain("payment_type contains unknown codes")
+
+    floats = {}
+    for name in ("fare_amount", "trip_distance"):
+        raw = table.column(name).combine_chunks()
+        if not (pa.types.is_integer(raw.type) or pa.types.is_floating(raw.type)
+                or pa.types.is_decimal(raw.type)):
+            return _abstain(f"{name} is not numeric")
+        arr = raw.cast(pa.float64())
+        if not pc.all(pc.is_finite(arr)).as_py():
+            return _abstain(f"{name} contains non-finite values")
+        floats[name] = arr
+
+    if pc.min(floats["trip_distance"]).as_py() < 0:
+        return _abstain("trip_distance contains negative values")
+
+    # 5. Metrics (exact summation, no rounding).
+    fares = floats["fare_amount"].to_pylist()
+    distances = floats["trip_distance"].to_pylist()
+    payments = pay_arr.to_pylist()
+
+    total_fare = math.fsum(fares)
+    mean_fare = total_fare / n
+    mean_trip_distance = math.fsum(distances) / n
+    card_trips = sum(1 for p in payments if p == _CREDIT_CARD)
+    card_share = card_trips / n
+
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": n,
+            "total_fare": total_fare,
+            "mean_fare": mean_fare,
+            "mean_trip_distance": mean_trip_distance,
+            "card_share": card_share,
+        },
+        "reason": "",
+    }
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        return _analyze(data_path, manifest_path)
+    except Exception as exc:  # never raise, never print
+        return _abstain(f"unexpected error: {type(exc).__name__}")
+```

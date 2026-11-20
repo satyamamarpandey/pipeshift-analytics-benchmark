@@ -1,0 +1,25 @@
+=== started 2026-10-23T02:51:24-04:00
+=== package sha256 c65bdfb87cf5172266cfb86f04868a7e87e885797a5cb4c3d0fdbde8d23db92f
+=== uv venv + install from requirements-lock.txt (fonttools from source)
+=== python Python 3.13.16
+=== pytest before data download
+131 passed, 31 skipped in 72.29s (0:01:12)
+=== reproduce.py (full, includes official download)
+reproduce exit 0
+=== Acquire official TLC files (verifies recorded SHA-256)
+=== Profile natural data quality and draw stratified snapshots
+=== Materialize fault-injected episodes
+=== Compute independent oracle (DuckDB SQL + pure Python)
+=== Run deterministic baselines, ablations, trust-anchor test
+=== Full-month overhead timing
+=== Re-execute archived LLM generations in sandbox
+=== Re-execute archived LLM generations on held-out scenarios
+=== Recompute tables and macros
+=== Regenerate figures
+=== Legacy v1 benchmark (synthetic + 300-row excerpt)
+REPRODUCTION PASSED
+=== pytest after reproduction
+162 passed in 62.38s (0:01:02)
+=== LaTeX build of packaged paper source
+latexmk exit 0
+=== finished 2026-10-23T03:08:33-04:00

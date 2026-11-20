@@ -1,0 +1,9 @@
+family,B0_naive,B1_schema_aware,B2_statistical,B3_contract,B4_manifest,B5_contract_manifest,B6_all_checks
+compound,0.25,0.75,0.25,0.0,0.5,0.0,0.0
+control,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+distribution,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+numeric,0.8,0.8,0.38333333333333336,0.55,0.4,0.15,0.0
+provenance,0.2,0.2,0.19166666666666668,0.2,0.2,0.2,0.19166666666666668
+record,1.0,0.6,0.0,0.2,0.4,0.0,0.0
+schema,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+temporal,0.4,0.4,0.2,0.0,0.2,0.0,0.0

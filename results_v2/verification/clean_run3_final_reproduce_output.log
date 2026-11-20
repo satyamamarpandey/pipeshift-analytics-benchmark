@@ -1,0 +1,383 @@
+
+=== Acquire official TLC files (verifies recorded SHA-256)
+2024-12: 3,668,371 rows  sha256=41ebf7db80bebde6...
+2025-01: 3,475,226 rows  sha256=9af277e4c0d3f9de...
+2025-02: 3,577,543 rows  sha256=037cba555a73663f...
+2025-03: 4,145,257 rows  sha256=20c4b77cce457b7c...
+2025-04: 3,970,553 rows  sha256=6f98938de9380a3f...
+2025-05: 4,591,845 rows  sha256=7ef46bcd0fceee7f...
+2025-06: 4,322,960 rows  sha256=1bea7f5b09c74441...
+2025-07: 3,898,963 rows  sha256=1efa6a0458dc6034...
+2025-08: 3,574,091 rows  sha256=b982ace703e3564d...
+2025-09: 4,251,015 rows  sha256=cd39b9901f01d1fd...
+2025-10: 4,428,699 rows  sha256=e1f63caf331bc623...
+2025-11: 4,181,444 rows  sha256=2cf2f3127f96d4d5...
+2025-12: 4,305,006 rows  sha256=eaba7ff61ebb6453...
+
+=== Profile natural data quality and draw stratified snapshots
+2024-12: raw=3,668,371 admissible=3,520,142 outside_month=34
+2025-01: raw=3,475,226 admissible=3,254,381 outside_month=22
+2025-02: raw=3,577,543 admissible=3,311,379 outside_month=31
+2025-03: raw=4,145,257 admissible=3,849,283 outside_month=33
+2025-04: raw=3,970,553 admissible=3,706,497 outside_month=7
+2025-05: raw=4,591,845 admissible=4,156,176 outside_month=24
+2025-06: raw=4,322,960 admissible=3,936,885 outside_month=20
+2025-07: raw=3,898,963 admissible=3,550,094 outside_month=7
+2025-08: raw=3,574,091 admissible=3,227,832 outside_month=17
+2025-09: raw=4,251,015 admissible=3,895,369 outside_month=7
+2025-10: raw=4,428,699 admissible=4,011,883 outside_month=13
+2025-11: raw=4,181,444 admissible=3,704,740 outside_month=24
+2025-12: raw=4,305,006 admissible=4,107,420 outside_month=9
+
+=== Materialize fault-injected episodes
+materialized 2025-01
+materialized 2025-02
+materialized 2025-03
+materialized 2025-04
+materialized 2025-05
+materialized 2025-06
+materialized 2025-07
+materialized 2025-08
+materialized 2025-09
+materialized 2025-10
+materialized 2025-11
+materialized 2025-12
+suite
+heldout     72
+main       768
+sweep      768
+
+=== Compute independent oracle (DuckDB SQL + pure Python)
+72 target files; SQL vs Python max abs deviation 9.604e-10; 1608 episodes
+
+=== Run deterministic baselines, ablations, trust-anchor test
+outcome                      correct_abstention  correct_recovery  false_rejection  silent_error  unverified_accept
+workflow                                                                                                           
+ABL_minus_coerce_types                      457               207               81            23                  0
+ABL_minus_conflict_check                    434               253               35            23                 23
+ABL_minus_dedup_exact                       434               207               35            92                  0
+ABL_minus_domain_check                      457               253               35            23                  0
+ABL_minus_hash_check                        365               253               35            69                 46
+ABL_minus_manifest_required                 434               253               35            23                 23
+ABL_minus_normalize_names                   457               207               81            23                  0
+ABL_minus_null_check                        457               253               35            23                  0
+ABL_minus_parse_time                        457               184              104            23                  0
+ABL_minus_period_check                      434               253               35            23                 23
+ABL_minus_range_check                       457               253               35            23                  0
+ABL_minus_rowcount_check                    457               253               35            23                  0
+ABL_minus_stats_check                       438               288                0            42                  0
+B0_naive                                     72               192               72           312                120
+B1_schema_aware                              24               288                0           312                144
+B2_statistical                              225               253               35           117                138
+B3_contract                                 270               288                0           114                 96
+B4_manifest                                 240               288                0           192                 48
+B5_contract_manifest                        438               288                0            42                  0
+B6_all_checks                               457               253               35            23                  0
+B7_contract_registry                        366               288                0            18                 96
+{"rows": 22848, "wall_seconds": 69.0, "results_sha256_excluding_timing": "db14f2e1a127a25d8626070fbcd251a1e466c3cfa9f4637fd1721cd41ca9ce2a"}
+
+=== Full-month overhead timing
+workflow
+B0_naive                0.342
+B1_schema_aware         4.489
+B2_statistical          4.796
+B3_contract             4.553
+B4_manifest             4.289
+B5_contract_manifest    4.641
+B6_all_checks           5.348
+sha256_only             0.088
+
+=== Re-execute archived LLM generations in sandbox
+120 generations x 384 episodes to evaluate
+[1/120] test__claude-haiku-5-5__A_unassisted__00: {'correct_abstention': 240, 'false_rejection': 144}  (12s)
+[2/120] test__claude-haiku-5-5__B_schema_aware__00: {'correct_abstention': 147, 'correct_recovery': 132, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 12}  (18s)
+[3/120] test__claude-haiku-5-5__C_provenance_guided__00: {'correct_abstention': 219, 'correct_recovery': 109, 'false_rejection': 35, 'silent_error': 21}  (18s)
+[4/120] test__claude-haiku-5-5__A_unassisted__01: {'correct_recovery': 108, 'silent_error': 108, 'correct_abstention': 96, 'false_rejection': 36, 'unverified_accept': 36}  (18s)
+[5/120] test__claude-haiku-5-5__B_schema_aware__01: {'correct_abstention': 147, 'correct_recovery': 108, 'silent_error': 57, 'false_rejection': 36, 'unverified_accept': 36}  (18s)
+[6/120] test__claude-haiku-5-5__C_provenance_guided__01: {'correct_abstention': 219, 'correct_recovery': 108, 'false_rejection': 36, 'silent_error': 21}  (18s)
+[7/120] test__claude-haiku-5-5__A_unassisted__02: {'correct_abstention': 240, 'false_rejection': 144}  (18s)
+[8/120] test__claude-haiku-5-5__B_schema_aware__02: {'correct_abstention': 147, 'correct_recovery': 132, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 12}  (19s)
+[9/120] test__claude-haiku-5-5__C_provenance_guided__02: {'correct_abstention': 240, 'false_rejection': 132, 'correct_recovery': 12}  (23s)
+[10/120] test__claude-haiku-5-5__A_unassisted__03: {'correct_abstention': 108, 'correct_recovery': 96, 'silent_error': 96, 'false_rejection': 48, 'unverified_accept': 36}  (25s)
+[11/120] test__claude-haiku-5-5__B_schema_aware__03: {'correct_abstention': 147, 'correct_recovery': 132, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 12}  (34s)
+[12/120] test__claude-haiku-5-5__C_provenance_guided__03: {'correct_abstention': 219, 'correct_recovery': 109, 'false_rejection': 35, 'silent_error': 21}  (34s)
+[13/120] test__claude-haiku-5-5__A_unassisted__04: {'correct_abstention': 108, 'correct_recovery': 96, 'silent_error': 96, 'false_rejection': 48, 'unverified_accept': 36}  (34s)
+[14/120] test__claude-haiku-5-5__B_schema_aware__04: {'correct_abstention': 135, 'correct_recovery': 108, 'silent_error': 69, 'false_rejection': 36, 'unverified_accept': 36}  (36s)
+[15/120] test__claude-haiku-5-5__C_provenance_guided__04: {'correct_abstention': 219, 'correct_recovery': 108, 'false_rejection': 36, 'silent_error': 21}  (36s)
+[16/120] test__claude-haiku-5-5__A_unassisted__05: {'correct_recovery': 108, 'silent_error': 108, 'correct_abstention': 96, 'false_rejection': 36, 'unverified_accept': 36}  (36s)
+[17/120] test__claude-haiku-5-5__B_schema_aware__05: {'correct_abstention': 147, 'correct_recovery': 132, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 12}  (43s)
+[18/120] test__claude-haiku-5-5__C_provenance_guided__05: {'correct_abstention': 219, 'correct_recovery': 96, 'false_rejection': 48, 'silent_error': 21}  (43s)
+[19/120] test__claude-haiku-5-5__A_unassisted__06: {'correct_abstention': 108, 'silent_error': 96, 'correct_recovery': 84, 'false_rejection': 60, 'unverified_accept': 36}  (45s)
+[20/120] test__claude-haiku-5-5__B_schema_aware__06: {'correct_abstention': 147, 'correct_recovery': 132, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 12}  (50s)
+[21/120] test__claude-haiku-5-5__C_provenance_guided__06: {'correct_abstention': 219, 'correct_recovery': 108, 'false_rejection': 36, 'silent_error': 21}  (52s)
+[22/120] test__claude-haiku-5-5__A_unassisted__07: {'correct_recovery': 108, 'silent_error': 108, 'correct_abstention': 96, 'false_rejection': 36, 'unverified_accept': 36}  (52s)
+[23/120] test__claude-haiku-5-5__B_schema_aware__07: {'correct_abstention': 147, 'correct_recovery': 133, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 11}  (58s)
+[24/120] test__claude-haiku-5-5__C_provenance_guided__07: {'correct_abstention': 219, 'correct_recovery': 120, 'false_rejection': 24, 'silent_error': 21}  (58s)
+[25/120] test__claude-haiku-5-5__A_unassisted__08: {'correct_recovery': 108, 'silent_error': 108, 'correct_abstention': 96, 'false_rejection': 36, 'unverified_accept': 36}  (58s)
+[26/120] test__claude-haiku-5-5__B_schema_aware__08: {'correct_abstention': 147, 'correct_recovery': 108, 'silent_error': 57, 'false_rejection': 36, 'unverified_accept': 36}  (60s)
+[27/120] test__claude-haiku-5-5__C_provenance_guided__08: {'correct_abstention': 219, 'correct_recovery': 108, 'false_rejection': 36, 'silent_error': 21}  (62s)
+[28/120] test__claude-haiku-5-5__A_unassisted__09: {'correct_abstention': 108, 'correct_recovery': 96, 'silent_error': 96, 'false_rejection': 48, 'unverified_accept': 36}  (62s)
+[29/120] test__claude-haiku-5-5__B_schema_aware__09: {'correct_abstention': 147, 'correct_recovery': 132, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 12}  (70s)
+[30/120] test__claude-haiku-5-5__C_provenance_guided__09: {'correct_abstention': 219, 'correct_recovery': 120, 'false_rejection': 24, 'silent_error': 21}  (74s)
+[31/120] test__claude-opus-5-5__A_unassisted__00: {'correct_abstention': 156, 'correct_recovery': 110, 'silent_error': 84, 'false_rejection': 34}  (74s)
+[32/120] test__claude-opus-5-5__B_schema_aware__00: {'correct_abstention': 171, 'correct_recovery': 144, 'silent_error': 45, 'unverified_accept': 24}  (97s)
+[33/120] test__claude-opus-5-5__C_provenance_guided__00: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (97s)
+[34/120] test__claude-opus-5-5__A_unassisted__01: {'correct_abstention': 192, 'correct_recovery': 110, 'silent_error': 48, 'false_rejection': 34}  (97s)
+[35/120] test__claude-opus-5-5__B_schema_aware__01: {'correct_abstention': 171, 'correct_recovery': 144, 'silent_error': 45, 'unverified_accept': 24}  (97s)
+[36/120] test__claude-opus-5-5__C_provenance_guided__01: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (97s)
+[37/120] test__claude-opus-5-5__A_unassisted__02: {'correct_abstention': 180, 'correct_recovery': 110, 'silent_error': 48, 'false_rejection': 34, 'unverified_accept': 12}  (97s)
+[38/120] test__claude-opus-5-5__B_schema_aware__02: {'correct_abstention': 171, 'correct_recovery': 144, 'silent_error': 45, 'unverified_accept': 24}  (97s)
+[39/120] test__claude-opus-5-5__C_provenance_guided__02: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (98s)
+[40/120] test__claude-opus-5-5__A_unassisted__03: {'correct_recovery': 120, 'silent_error': 108, 'correct_abstention': 96, 'unverified_accept': 36, 'false_rejection': 24}  (98s)
+[41/120] test__claude-opus-5-5__B_schema_aware__03: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (106s)
+[42/120] test__claude-opus-5-5__C_provenance_guided__03: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (110s)
+[43/120] test__claude-opus-5-5__A_unassisted__04: {'correct_abstention': 180, 'correct_recovery': 98, 'silent_error': 60, 'false_rejection': 46}  (110s)
+[44/120] test__claude-opus-5-5__B_schema_aware__04: {'correct_abstention': 171, 'correct_recovery': 144, 'silent_error': 45, 'unverified_accept': 24}  (111s)
+[45/120] test__claude-opus-5-5__C_provenance_guided__04: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (117s)
+[46/120] test__claude-opus-5-5__A_unassisted__05: {'correct_abstention': 156, 'correct_recovery': 110, 'silent_error': 60, 'false_rejection': 34, 'unverified_accept': 24}  (117s)
+[47/120] test__claude-opus-5-5__B_schema_aware__05: {'correct_abstention': 171, 'correct_recovery': 144, 'silent_error': 45, 'unverified_accept': 24}  (123s)
+[48/120] test__claude-opus-5-5__C_provenance_guided__05: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (123s)
+[49/120] test__claude-opus-5-5__A_unassisted__06: {'correct_abstention': 144, 'correct_recovery': 110, 'silent_error': 106, 'false_rejection': 24}  (123s)
+[50/120] test__claude-opus-5-5__B_schema_aware__06: {'correct_abstention': 171, 'correct_recovery': 144, 'silent_error': 45, 'unverified_accept': 24}  (131s)
+[51/120] test__claude-opus-5-5__C_provenance_guided__06: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (132s)
+[52/120] test__claude-opus-5-5__A_unassisted__07: {'correct_abstention': 192, 'correct_recovery': 120, 'silent_error': 48, 'false_rejection': 24}  (132s)
+[53/120] test__claude-opus-5-5__B_schema_aware__07: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (138s)
+[54/120] test__claude-opus-5-5__C_provenance_guided__07: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (139s)
+[55/120] test__claude-opus-5-5__A_unassisted__08: {'correct_abstention': 156, 'correct_recovery': 110, 'silent_error': 60, 'false_rejection': 34, 'unverified_accept': 24}  (139s)
+[56/120] test__claude-opus-5-5__B_schema_aware__08: {'correct_abstention': 171, 'correct_recovery': 144, 'silent_error': 45, 'unverified_accept': 24}  (148s)
+[57/120] test__claude-opus-5-5__C_provenance_guided__08: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (148s)
+[58/120] test__claude-opus-5-5__A_unassisted__09: {'correct_abstention': 192, 'correct_recovery': 98, 'silent_error': 60, 'false_rejection': 34}  (148s)
+[59/120] test__claude-opus-5-5__B_schema_aware__09: {'correct_abstention': 171, 'correct_recovery': 144, 'silent_error': 45, 'unverified_accept': 24}  (156s)
+[60/120] test__claude-opus-5-5__C_provenance_guided__09: {'correct_abstention': 219, 'correct_recovery': 144, 'silent_error': 21}  (156s)
+[61/120] test__claude-sonnet-5-5__A_unassisted__00: {'correct_abstention': 156, 'correct_recovery': 97, 'silent_error': 96, 'false_rejection': 35}  (156s)
+[62/120] test__claude-sonnet-5-5__B_schema_aware__00: {'correct_abstention': 147, 'correct_recovery': 144, 'silent_error': 57, 'unverified_accept': 36}  (162s)
+[63/120] test__claude-sonnet-5-5__C_provenance_guided__00: {'correct_abstention': 219, 'correct_recovery': 134, 'silent_error': 21, 'false_rejection': 10}  (162s)
+[64/120] test__claude-sonnet-5-5__A_unassisted__01: {'silent_error': 114, 'correct_recovery': 109, 'correct_abstention': 96, 'false_rejection': 35, 'unverified_accept': 30}  (163s)
+[65/120] test__claude-sonnet-5-5__B_schema_aware__01: {'correct_abstention': 171, 'correct_recovery': 133, 'silent_error': 45, 'unverified_accept': 24, 'false_rejection': 11}  (166s)
+[66/120] test__claude-sonnet-5-5__C_provenance_guided__01: {'correct_abstention': 219, 'correct_recovery': 108, 'false_rejection': 36, 'silent_error': 21}  (166s)
+[67/120] test__claude-sonnet-5-5__A_unassisted__02: {'correct_recovery': 120, 'silent_error': 120, 'correct_abstention': 72, 'unverified_accept': 48, 'false_rejection': 24}  (170s)
+[68/120] test__claude-sonnet-5-5__B_schema_aware__02: {'correct_abstention': 147, 'correct_recovery': 108, 'silent_error': 57, 'false_rejection': 36, 'unverified_accept': 36}  (176s)
+[69/120] test__claude-sonnet-5-5__C_provenance_guided__02: {'correct_abstention': 219, 'correct_recovery': 109, 'false_rejection': 35, 'silent_error': 21}  (176s)
+[70/120] test__claude-sonnet-5-5__A_unassisted__03: {'correct_recovery': 120, 'silent_error': 120, 'correct_abstention': 72, 'unverified_accept': 48, 'false_rejection': 24}  (177s)
+[71/120] test__claude-sonnet-5-5__B_schema_aware__03: {'correct_abstention': 147, 'correct_recovery': 109, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 35}  (181s)
+[72/120] test__claude-sonnet-5-5__C_provenance_guided__03: {'correct_abstention': 219, 'correct_recovery': 108, 'false_rejection': 36, 'silent_error': 21}  (181s)
+[73/120] test__claude-sonnet-5-5__A_unassisted__04: {'correct_abstention': 132, 'correct_recovery': 110, 'silent_error': 84, 'false_rejection': 34, 'unverified_accept': 24}  (183s)
+[74/120] test__claude-sonnet-5-5__B_schema_aware__04: {'correct_abstention': 147, 'correct_recovery': 110, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 34}  (185s)
+[75/120] test__claude-sonnet-5-5__C_provenance_guided__04: {'correct_abstention': 219, 'correct_recovery': 133, 'silent_error': 21, 'false_rejection': 11}  (189s)
+[76/120] test__claude-sonnet-5-5__A_unassisted__05: {'correct_abstention': 132, 'silent_error': 106, 'correct_recovery': 98, 'false_rejection': 24, 'unverified_accept': 24}  (191s)
+[77/120] test__claude-sonnet-5-5__B_schema_aware__05: {'correct_abstention': 147, 'correct_recovery': 120, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 24}  (199s)
+[78/120] test__claude-sonnet-5-5__C_provenance_guided__05: {'correct_abstention': 219, 'correct_recovery': 108, 'false_rejection': 36, 'silent_error': 21}  (199s)
+[79/120] test__claude-sonnet-5-5__A_unassisted__06: {'silent_error': 120, 'correct_recovery': 98, 'correct_abstention': 96, 'unverified_accept': 36, 'false_rejection': 34}  (199s)
+[80/120] test__claude-sonnet-5-5__B_schema_aware__06: {'correct_abstention': 171, 'correct_recovery': 108, 'silent_error': 45, 'false_rejection': 36, 'unverified_accept': 24}  (199s)
+[81/120] test__claude-sonnet-5-5__C_provenance_guided__06: {'correct_abstention': 219, 'correct_recovery': 120, 'false_rejection': 24, 'silent_error': 21}  (205s)
+[82/120] test__claude-sonnet-5-5__A_unassisted__07: {'correct_abstention': 132, 'correct_recovery': 98, 'silent_error': 96, 'false_rejection': 34, 'unverified_accept': 24}  (205s)
+[83/120] test__claude-sonnet-5-5__B_schema_aware__07: {'correct_abstention': 147, 'correct_recovery': 120, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 24}  (211s)
+[84/120] test__claude-sonnet-5-5__C_provenance_guided__07: {'correct_abstention': 219, 'correct_recovery': 109, 'false_rejection': 35, 'silent_error': 21}  (211s)
+[85/120] test__claude-sonnet-5-5__A_unassisted__08: {'correct_abstention': 132, 'correct_recovery': 110, 'silent_error': 84, 'false_rejection': 34, 'unverified_accept': 24}  (211s)
+[86/120] test__claude-sonnet-5-5__B_schema_aware__08: {'correct_abstention': 171, 'correct_recovery': 108, 'silent_error': 45, 'false_rejection': 36, 'unverified_accept': 24}  (214s)
+[87/120] test__claude-sonnet-5-5__C_provenance_guided__08: {'correct_abstention': 219, 'correct_recovery': 110, 'false_rejection': 34, 'silent_error': 21}  (215s)
+[88/120] test__claude-sonnet-5-5__A_unassisted__09: {'correct_recovery': 120, 'silent_error': 120, 'correct_abstention': 72, 'unverified_accept': 48, 'false_rejection': 24}  (215s)
+[89/120] test__claude-sonnet-5-5__B_schema_aware__09: {'correct_abstention': 147, 'correct_recovery': 134, 'silent_error': 57, 'unverified_accept': 36, 'false_rejection': 10}  (220s)
+[90/120] test__claude-sonnet-5-5__C_provenance_guided__09: {'correct_abstention': 219, 'correct_recovery': 109, 'false_rejection': 35, 'silent_error': 21}  (222s)
+[91/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__00: {'silent_error': 156, 'correct_recovery': 96, 'unverified_accept': 60, 'correct_abstention': 36, 'false_rejection': 36}  (222s)
+[92/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__00: {'correct_abstention': 240, 'false_rejection': 144}  (222s)
+[93/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__00: {'correct_abstention': 240, 'false_rejection': 144}  (224s)
+[94/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__01: {'silent_error': 156, 'correct_recovery': 85, 'unverified_accept': 60, 'false_rejection': 47, 'correct_abstention': 36}  (231s)
+[95/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__01: {'silent_error': 132, 'correct_recovery': 86, 'correct_abstention': 60, 'false_rejection': 58, 'unverified_accept': 48}  (231s)
+[96/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__01: {'correct_abstention': 240, 'false_rejection': 144}  (231s)
+[97/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02: {'silent_error': 302, 'false_rejection': 46, 'correct_abstention': 36}  (238s)
+[98/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__02: {'correct_abstention': 240, 'false_rejection': 144}  (238s)
+[99/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__02: {'correct_abstention': 240, 'false_rejection': 144}  (238s)
+[100/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__03: {'correct_abstention': 240, 'false_rejection': 144}  (238s)
+[101/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__03: {'correct_abstention': 240, 'false_rejection': 144}  (238s)
+[102/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__03: {'correct_abstention': 240, 'false_rejection': 144}  (238s)
+[103/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__04: {'correct_abstention': 240, 'false_rejection': 144}  (241s)
+[104/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__04: {'correct_abstention': 240, 'false_rejection': 144}  (244s)
+[105/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__04: {'correct_abstention': 240, 'false_rejection': 144}  (246s)
+[106/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__05: {'silent_error': 312, 'false_rejection': 36, 'correct_abstention': 36}  (246s)
+[107/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__05: {'correct_abstention': 240, 'false_rejection': 144}  (251s)
+[108/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__05: {'correct_abstention': 240, 'false_rejection': 144}  (251s)
+[109/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__06: {'invalid_output': 384}  (251s)
+[110/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__06: {'correct_abstention': 240, 'false_rejection': 144}  (251s)
+[111/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__06: {'correct_abstention': 240, 'false_rejection': 144}  (251s)
+[112/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__07: {'correct_abstention': 240, 'false_rejection': 144}  (254s)
+[113/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__07: {'correct_abstention': 240, 'false_rejection': 144}  (257s)
+[114/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__07: {'correct_abstention': 240, 'false_rejection': 144}  (257s)
+[115/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__08: {'silent_error': 156, 'correct_recovery': 85, 'unverified_accept': 60, 'false_rejection': 47, 'correct_abstention': 36}  (262s)
+[116/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__08: {'correct_abstention': 240, 'false_rejection': 144}  (262s)
+[117/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__08: {'correct_abstention': 240, 'false_rejection': 144}  (262s)
+[118/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__09: {'silent_error': 156, 'correct_recovery': 96, 'unverified_accept': 60, 'correct_abstention': 36, 'false_rejection': 36}  (263s)
+[119/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__09: {'correct_abstention': 240, 'false_rejection': 144}  (263s)
+[120/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__09: {'correct_abstention': 240, 'false_rejection': 144}  (263s)
+
+=== Re-execute archived LLM generations on held-out scenarios
+120 generations x 36 episodes to evaluate
+[1/120] test__claude-haiku-5-5__A_unassisted__00: {'correct_abstention': 36}  (11s)
+[2/120] test__claude-haiku-5-5__B_schema_aware__00: {'silent_error': 36}  (12s)
+[3/120] test__claude-haiku-5-5__C_provenance_guided__00: {'silent_error': 36}  (12s)
+[4/120] test__claude-haiku-5-5__A_unassisted__01: {'silent_error': 36}  (12s)
+[5/120] test__claude-haiku-5-5__B_schema_aware__01: {'silent_error': 36}  (12s)
+[6/120] test__claude-haiku-5-5__C_provenance_guided__01: {'silent_error': 36}  (12s)
+[7/120] test__claude-haiku-5-5__A_unassisted__02: {'correct_abstention': 36}  (12s)
+[8/120] test__claude-haiku-5-5__B_schema_aware__02: {'silent_error': 36}  (12s)
+[9/120] test__claude-haiku-5-5__C_provenance_guided__02: {'correct_abstention': 36}  (22s)
+[10/120] test__claude-haiku-5-5__A_unassisted__03: {'silent_error': 36}  (22s)
+[11/120] test__claude-haiku-5-5__B_schema_aware__03: {'silent_error': 36}  (24s)
+[12/120] test__claude-haiku-5-5__C_provenance_guided__03: {'silent_error': 36}  (24s)
+[13/120] test__claude-haiku-5-5__A_unassisted__04: {'silent_error': 36}  (24s)
+[14/120] test__claude-haiku-5-5__B_schema_aware__04: {'silent_error': 36}  (24s)
+[15/120] test__claude-haiku-5-5__C_provenance_guided__04: {'silent_error': 36}  (25s)
+[16/120] test__claude-haiku-5-5__A_unassisted__05: {'silent_error': 36}  (25s)
+[17/120] test__claude-haiku-5-5__B_schema_aware__05: {'silent_error': 36}  (34s)
+[18/120] test__claude-haiku-5-5__C_provenance_guided__05: {'silent_error': 36}  (34s)
+[19/120] test__claude-haiku-5-5__A_unassisted__06: {'silent_error': 36}  (35s)
+[20/120] test__claude-haiku-5-5__B_schema_aware__06: {'silent_error': 36}  (35s)
+[21/120] test__claude-haiku-5-5__C_provenance_guided__06: {'silent_error': 36}  (36s)
+[22/120] test__claude-haiku-5-5__A_unassisted__07: {'silent_error': 36}  (36s)
+[23/120] test__claude-haiku-5-5__B_schema_aware__07: {'silent_error': 36}  (36s)
+[24/120] test__claude-haiku-5-5__C_provenance_guided__07: {'silent_error': 36}  (37s)
+[25/120] test__claude-haiku-5-5__A_unassisted__08: {'silent_error': 36}  (46s)
+[26/120] test__claude-haiku-5-5__B_schema_aware__08: {'silent_error': 36}  (46s)
+[27/120] test__claude-haiku-5-5__C_provenance_guided__08: {'silent_error': 36}  (47s)
+[28/120] test__claude-haiku-5-5__A_unassisted__09: {'silent_error': 36}  (47s)
+[29/120] test__claude-haiku-5-5__B_schema_aware__09: {'silent_error': 36}  (47s)
+[30/120] test__claude-haiku-5-5__C_provenance_guided__09: {'silent_error': 36}  (48s)
+[31/120] test__claude-opus-5-5__A_unassisted__00: {'silent_error': 36}  (48s)
+[32/120] test__claude-opus-5-5__B_schema_aware__00: {'silent_error': 36}  (50s)
+[33/120] test__claude-opus-5-5__C_provenance_guided__00: {'silent_error': 36}  (58s)
+[34/120] test__claude-opus-5-5__A_unassisted__01: {'silent_error': 36}  (58s)
+[35/120] test__claude-opus-5-5__B_schema_aware__01: {'silent_error': 36}  (58s)
+[36/120] test__claude-opus-5-5__C_provenance_guided__01: {'silent_error': 36}  (59s)
+[37/120] test__claude-opus-5-5__A_unassisted__02: {'silent_error': 36}  (59s)
+[38/120] test__claude-opus-5-5__B_schema_aware__02: {'silent_error': 36}  (60s)
+[39/120] test__claude-opus-5-5__C_provenance_guided__02: {'silent_error': 36}  (61s)
+[40/120] test__claude-opus-5-5__A_unassisted__03: {'silent_error': 36}  (62s)
+[41/120] test__claude-opus-5-5__B_schema_aware__03: {'silent_error': 36}  (70s)
+[42/120] test__claude-opus-5-5__C_provenance_guided__03: {'silent_error': 36}  (71s)
+[43/120] test__claude-opus-5-5__A_unassisted__04: {'silent_error': 36}  (71s)
+[44/120] test__claude-opus-5-5__B_schema_aware__04: {'silent_error': 36}  (71s)
+[45/120] test__claude-opus-5-5__C_provenance_guided__04: {'silent_error': 36}  (73s)
+[46/120] test__claude-opus-5-5__A_unassisted__05: {'silent_error': 36}  (73s)
+[47/120] test__claude-opus-5-5__B_schema_aware__05: {'silent_error': 36}  (73s)
+[48/120] test__claude-opus-5-5__C_provenance_guided__05: {'silent_error': 36}  (75s)
+[49/120] test__claude-opus-5-5__A_unassisted__06: {'silent_error': 36}  (82s)
+[50/120] test__claude-opus-5-5__B_schema_aware__06: {'silent_error': 36}  (83s)
+[51/120] test__claude-opus-5-5__C_provenance_guided__06: {'silent_error': 36}  (83s)
+[52/120] test__claude-opus-5-5__A_unassisted__07: {'silent_error': 36}  (83s)
+[53/120] test__claude-opus-5-5__B_schema_aware__07: {'silent_error': 36}  (85s)
+[54/120] test__claude-opus-5-5__C_provenance_guided__07: {'silent_error': 36}  (85s)
+[55/120] test__claude-opus-5-5__A_unassisted__08: {'silent_error': 36}  (85s)
+[56/120] test__claude-opus-5-5__B_schema_aware__08: {'silent_error': 36}  (88s)
+[57/120] test__claude-opus-5-5__C_provenance_guided__08: {'silent_error': 36}  (94s)
+[58/120] test__claude-opus-5-5__A_unassisted__09: {'silent_error': 36}  (95s)
+[59/120] test__claude-opus-5-5__B_schema_aware__09: {'silent_error': 36}  (95s)
+[60/120] test__claude-opus-5-5__C_provenance_guided__09: {'silent_error': 36}  (95s)
+[61/120] test__claude-sonnet-5-5__A_unassisted__00: {'silent_error': 36}  (96s)
+[62/120] test__claude-sonnet-5-5__B_schema_aware__00: {'silent_error': 36}  (96s)
+[63/120] test__claude-sonnet-5-5__C_provenance_guided__00: {'silent_error': 36}  (97s)
+[64/120] test__claude-sonnet-5-5__A_unassisted__01: {'silent_error': 36}  (99s)
+[65/120] test__claude-sonnet-5-5__B_schema_aware__01: {'silent_error': 36}  (105s)
+[66/120] test__claude-sonnet-5-5__C_provenance_guided__01: {'silent_error': 36}  (106s)
+[67/120] test__claude-sonnet-5-5__A_unassisted__02: {'silent_error': 36}  (106s)
+[68/120] test__claude-sonnet-5-5__B_schema_aware__02: {'silent_error': 36}  (107s)
+[69/120] test__claude-sonnet-5-5__C_provenance_guided__02: {'silent_error': 36}  (108s)
+[70/120] test__claude-sonnet-5-5__A_unassisted__03: {'silent_error': 36}  (108s)
+[71/120] test__claude-sonnet-5-5__B_schema_aware__03: {'silent_error': 36}  (109s)
+[72/120] test__claude-sonnet-5-5__C_provenance_guided__03: {'silent_error': 36}  (112s)
+[73/120] test__claude-sonnet-5-5__A_unassisted__04: {'silent_error': 36}  (117s)
+[74/120] test__claude-sonnet-5-5__B_schema_aware__04: {'silent_error': 36}  (118s)
+[75/120] test__claude-sonnet-5-5__C_provenance_guided__04: {'silent_error': 36}  (118s)
+[76/120] test__claude-sonnet-5-5__A_unassisted__05: {'silent_error': 36}  (118s)
+[77/120] test__claude-sonnet-5-5__B_schema_aware__05: {'silent_error': 36}  (120s)
+[78/120] test__claude-sonnet-5-5__C_provenance_guided__05: {'silent_error': 36}  (120s)
+[79/120] test__claude-sonnet-5-5__A_unassisted__06: {'silent_error': 36}  (120s)
+[80/120] test__claude-sonnet-5-5__B_schema_aware__06: {'silent_error': 36}  (123s)
+[81/120] test__claude-sonnet-5-5__C_provenance_guided__06: {'silent_error': 36}  (129s)
+[82/120] test__claude-sonnet-5-5__A_unassisted__07: {'silent_error': 36}  (129s)
+[83/120] test__claude-sonnet-5-5__B_schema_aware__07: {'silent_error': 36}  (130s)
+[84/120] test__claude-sonnet-5-5__C_provenance_guided__07: {'silent_error': 36}  (130s)
+[85/120] test__claude-sonnet-5-5__A_unassisted__08: {'silent_error': 36}  (131s)
+[86/120] test__claude-sonnet-5-5__B_schema_aware__08: {'silent_error': 36}  (131s)
+[87/120] test__claude-sonnet-5-5__C_provenance_guided__08: {'silent_error': 36}  (132s)
+[88/120] test__claude-sonnet-5-5__A_unassisted__09: {'silent_error': 36}  (135s)
+[89/120] test__claude-sonnet-5-5__B_schema_aware__09: {'silent_error': 36}  (141s)
+[90/120] test__claude-sonnet-5-5__C_provenance_guided__09: {'silent_error': 36}  (141s)
+[91/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__00: {'silent_error': 36}  (141s)
+[92/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__00: {'correct_abstention': 36}  (141s)
+[93/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__00: {'correct_abstention': 36}  (143s)
+[94/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__01: {'silent_error': 36}  (143s)
+[95/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__01: {'silent_error': 36}  (143s)
+[96/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__01: {'correct_abstention': 36}  (146s)
+[97/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02: {'silent_error': 36}  (152s)
+[98/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__02: {'correct_abstention': 36}  (152s)
+[99/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__02: {'correct_abstention': 36}  (152s)
+[100/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__03: {'correct_abstention': 36}  (152s)
+[101/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__03: {'correct_abstention': 36}  (153s)
+[102/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__03: {'correct_abstention': 36}  (154s)
+[103/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__04: {'correct_abstention': 36}  (154s)
+[104/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__04: {'correct_abstention': 36}  (157s)
+[105/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__04: {'correct_abstention': 36}  (163s)
+[106/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__05: {'silent_error': 24, 'unverified_accept': 12}  (163s)
+[107/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__05: {'correct_abstention': 36}  (164s)
+[108/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__05: {'correct_abstention': 36}  (164s)
+[109/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__06: {'invalid_output': 36}  (164s)
+[110/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__06: {'correct_abstention': 36}  (165s)
+[111/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__06: {'correct_abstention': 36}  (165s)
+[112/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__07: {'correct_abstention': 36}  (165s)
+[113/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__07: {'correct_abstention': 36}  (168s)
+[114/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__07: {'correct_abstention': 36}  (173s)
+[115/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__08: {'silent_error': 36}  (174s)
+[116/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__08: {'correct_abstention': 36}  (174s)
+[117/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__08: {'correct_abstention': 36}  (175s)
+[118/120] test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__09: {'silent_error': 36}  (175s)
+[119/120] test__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__09: {'correct_abstention': 36}  (175s)
+[120/120] test__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__09: {'correct_abstention': 36}  (175s)
+
+=== Recompute tables and macros
+387 macros; tables in <package root>\results_v2\tables
+
+=== Regenerate figures
+figures written to <package root>\figures_v2
+            episodes  correct  silent_accepts  correct_pct  silent_pct
+recipe                                                                
+quick            390      120             180        30.77       46.15
+schema           390      210             180        53.85       46.15
+provenance       390      390               0       100.00        0.00
+{
+  "provenance_minus_quick_correct_pct": {
+    "point": 69.23,
+    "bootstrap_95pct": [
+      69.23,
+      69.23
+    ]
+  },
+  "provenance_minus_schema_correct_pct": {
+    "point": 46.15,
+    "bootstrap_95pct": [
+      46.15,
+      46.15
+    ]
+  }
+}
+Saved <package root>\reproduction_check\legacy
+Source:  https://data.cityofnewyork.us/resource/irx2-vgm4.json?%24select=tpep_pickup_datetime%2Ctrip_distance%2Cfare_amount%2Cpayment_type%2Cpulocationid&%24where=tpep_pickup_datetime+between+%272025-01-01T00%3A00%3A00%27+and+%272025-01-02T00%3A00%3A00%27+and+trip_distance%3E0+and+fare_amount%3E%3D0&%24order=tpep_pickup_datetime+ASC%2Ctrip_distance+ASC%2Cfare_amount+ASC%2Cpayment_type+ASC%2Cpulocationid+ASC&%24limit=300
+Stats: {"n": 300, "fare_sum": 7131.1900000000005, "distance_sum": 1416.0, "payment_sum": 369, "zone_sum": 47107}
+File SHA256: 7f30da0fe4363cbf4691370b59fd62febcad7c640faf0318cca77d396c2bf516
+Locally derived IDs. Dataset license on NYC portal unspecified; do not redistribute raw excerpt.
+            episodes  correct  silent_accepts  correct_pct
+recipe                                                    
+quick            390      120             180        30.77
+schema           390      210             180        53.85
+provenance       390      390               0       100.00
+
+=== Legacy v1 benchmark (synthetic + 300-row excerpt)
+{
+  "heldout_pairs_compared": 4320,
+  "heldout_same_outcome_fraction": 1.0,
+  "baselines_identical_outcomes": true,
+  "llm_pairs_compared": 46080,
+  "llm_same_outcome_fraction": 1.0,
+  "llm_differences": [],
+  "legacy_real_excerpt_identical": true
+}
+REPRODUCTION PASSED

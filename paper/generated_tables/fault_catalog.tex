@@ -1,0 +1,32 @@
+F00 & clean & R & cons. \\
+S01 & column reorder & R & cons. \\
+S02 & extra columns & R & cons. \\
+S03 & documented rename & R & cons. \\
+S04 & numeric as text & R & cons. \\
+S05 & integer as float & R & cons. \\
+S06 & missing required column & A & cons. \\
+T01 & timestamp text ms & R & cons. \\
+T02 & mixed time formats & R & cons. \\
+T03 & tz aware utc & R & cons. \\
+T04 & stale snapshot & A & orig. \\
+T05 & outdated partition mix (10\%) & A & cons. \\
+T06 & incorrect period metadata & A & wrong period \\
+R01 & exact duplicates (5\%) & R & cons. \\
+R02 & conflicting duplicates (1\%) & A & cons. \\
+R03 & missing values (2\%) & A & cons. \\
+R04 & missing records (15\%) & A & orig. \\
+R05 & unexpected category (3\%) & A & cons. \\
+D01 & valid distribution shift & R & cons. \\
+N01 & unannounced value change (2\%) & A & orig. \\
+N02 & rounding & A & orig. \\
+N03 & fare in cents & A & cons. \\
+N04 & distance in km & A & cons. \\
+N05 & subsecond timestamp change (2\%) & A & orig. \\
+P01 & manifest missing & A & none \\
+P02 & checksum incorrect & A & bad hash \\
+P03 & stale manifest & A & v1 for v2 \\
+P04 & tampered data and manifest (2\%) & A & forged \\
+X01 & compound benign & R & cons. \\
+X02 & compound rename missing & A & cons. \\
+X03 & compound stale duplicates & A & orig. \\
+X04 & compound text cents & A & cons. \\

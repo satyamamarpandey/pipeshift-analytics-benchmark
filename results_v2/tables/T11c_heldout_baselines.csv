@@ -1,0 +1,9 @@
+workflow,H01,H02,H03
+B0_naive,1.0,1.0,1.0
+B1_schema_aware,1.0,1.0,1.0
+B2_statistical,0.9583333333333334,0.0,0.9166666666666666
+B3_contract,1.0,1.0,1.0
+B4_manifest,1.0,1.0,1.0
+B5_contract_manifest,1.0,1.0,1.0
+B6_all_checks,0.9583333333333334,0.0,0.9166666666666666
+B7_contract_registry,1.0,1.0,1.0

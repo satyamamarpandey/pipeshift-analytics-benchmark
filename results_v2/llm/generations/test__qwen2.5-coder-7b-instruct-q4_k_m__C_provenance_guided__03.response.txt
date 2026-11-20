@@ -1,0 +1,77 @@
+```python
+import pandas as pd
+import json
+import os
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    # Step 1: Load and validate manifest
+    if not os.path.exists(manifest_path) or not os.path.isfile(manifest_path):
+        return {"status": "abstain", "metrics": None, "reason": "Manifest does not exist or is not a file"}
+    
+    with open(manifest_path, 'r') as f:
+        manifest = json.load(f)
+    
+    if not all(key in manifest for key in ['dataset', 'snapshot_id', 'snapshot_version', 'reporting_period', 'file', 'file_sha256', 'row_count', 'columns', 'units', 'schema_changes', 'description']):
+        return {"status": "abstain", "metrics": None, "reason": "Manifest is missing required fields"}
+    
+    # Step 2: Verify file integrity
+    file_sha256 = manifest['file_sha256']
+    if os.path.exists(data_path) and os.path.isfile(data_path):
+        with open(data_path, 'rb') as f:
+            actual_sha256 = f.read()
+            if actual_sha256.hex() != file_sha256:
+                return {"status": "abstain", "metrics": None, "reason": "File SHA-256 mismatch"}
+    else:
+        return {"status": "abstain", "metrics": None, "reason": "Data file does not exist or is not a file"}
+    
+    # Step 3: Verify row count
+    if manifest['row_count'] != sum(1 for _ in pd.read_parquet(data_path, engine='pyarrow')):
+        return {"status": "abstain", "metrics": None, "reason": "Row count mismatch"}
+    
+    # Step 4: Verify columns
+    expected_columns = {item['name']: item['type'] for item in manifest['columns']}
+    actual_columns = pd.read_parquet(data_path, engine='pyarrow').columns
+    if not expected_columns.keys() == actual_columns:
+        return {"status": "abstain", "metrics": None, "reason": "Column mismatch"}
+    
+    # Step 5: Verify timestamp range
+    df = pd.read_parquet(data_path, engine='pyarrow')
+    if not (manifest['reporting_period']['start'] <= df['tpep_pickup_datetime'].dt.tz_localize(None) < manifest['reporting_period']['end']):
+        return {"status": "abstain", "metrics": None, "reason": "Timestamp out of range"}
+    
+    # Step 6: Apply schema changes
+    schema_changes = {item['to']: item['from'] for item in manifest.get('schema_changes', []) if item['type'] == 'rename'}
+    for old_name, new_name in schema_changes.items():
+        if old_name in df.columns:
+            df.rename(columns={old_name: new_name}, inplace=True)
+    
+    # Step 7: Verify data contract
+    required_columns = {'record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount'}
+    if not required_columns.issubset(df.columns):
+        return {"status": "abstain", "metrics": None, "reason": "Missing required columns"}
+    
+    if not (df['trip_distance'] > 0).all() or not (df['fare_amount'] >= 0).all():
+        return {"status": "abstain", "metrics": None, "reason": "Invalid values for trip_distance or fare_amount"}
+    
+    if df[['record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount']].duplicated().any():
+        return {"status": "abstain", "metrics": None, "reason": "Duplicate records found"}
+    
+    # Step 8: Compute metrics
+    trip_count = len(df)
+    total_fare = df['fare_amount'].sum()
+    mean_fare = df['fare_amount'].mean()
+    mean_trip_distance = df['trip_distance'].mean()
+    card_share = (df['payment_type'] == 1).mean()
+    
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": trip_count,
+            "total_fare": total_fare,
+            "mean_fare": mean_fare,
+            "mean_trip_distance": mean_trip_distance,
+            "card_share": card_share
+        },
+        "reason": ""
+    }
+```

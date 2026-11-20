@@ -1,0 +1,14 @@
+removed_component,correct_recovery,correct_abstention,false_rejection,silent_error,unverified_accept,invalid_output,delta_silent,delta_false_rejection,delta_unverified,faults_affected
+dedup_exact,207,434,35,92,0,0,69,0,0,X01(+23)|R01(+23)|R02(+23)
+hash_check,253,365,35,69,46,0,46,0,46,N01(+23)|N02(+23)|N05(+23)|P02(+23)
+stats_check,288,438,0,42,0,0,19,-35,0,N04(+18)|P04(+1)
+conflict_check,253,434,35,23,23,0,0,0,23,R02(+23)
+coerce_types,207,457,81,23,0,0,0,46,0,X01(+23)|S04(+23)
+domain_check,253,457,35,23,0,0,0,0,0,
+manifest_required,253,434,35,23,23,0,0,0,23,P01(+23)
+null_check,253,457,35,23,0,0,0,0,0,
+normalize_names,207,457,81,23,0,0,0,46,0,X01(+23)|S03(+23)
+parse_time,184,457,104,23,0,0,0,69,0,T01(+23)|T02(+23)|T03(+23)
+period_check,253,434,35,23,23,0,0,0,23,T06(+23)
+range_check,253,457,35,23,0,0,0,0,0,
+rowcount_check,253,457,35,23,0,0,0,0,0,

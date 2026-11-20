@@ -1,0 +1,12 @@
+fid,suite,intensity,B5_contract_manifest,B7_contract_registry
+F00,main,,0/24 abstain; 0 silent; 24 recovered,0/24 abstain; 0 silent; 24 recovered
+N01,main,0.02,24/24 abstain; 0 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered
+N01,sweep,0.005,24/24 abstain; 0 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered
+N01,sweep,0.02,24/24 abstain; 0 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered
+N01,sweep,0.1,24/24 abstain; 0 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered
+N01,sweep,one,24/24 abstain; 0 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered
+P04,main,0.02,0/24 abstain; 24 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered
+P04,sweep,0.005,0/24 abstain; 24 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered
+P04,sweep,0.02,0/24 abstain; 24 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered
+P04,sweep,0.1,0/24 abstain; 24 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered
+P04,sweep,one,0/24 abstain; 24 silent; 0 recovered,24/24 abstain; 0 silent; 0 recovered

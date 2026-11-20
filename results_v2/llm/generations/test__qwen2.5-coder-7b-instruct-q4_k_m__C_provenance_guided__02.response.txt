@@ -1,0 +1,77 @@
+```python
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import json
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    # Step 1: Verify manifest exists and is valid JSON
+    try:
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"status": "abstain", "metrics": None, "reason": "Manifest is missing or invalid JSON"}
+
+    # Step 2: Verify SHA-256
+    try:
+        with open(data_path, 'rb') as f:
+            data_sha256 = f.read()
+        calculated_sha256 = data_sha256.hex()
+        if calculated_sha256 != manifest['file_sha256']:
+            return {"status": "abstain", "metrics": None, "reason": "SHA-256 mismatch"}
+    except FileNotFoundError:
+        return {"status": "abstain", "metrics": None, "reason": "Data file is missing"}
+
+    # Step 3: Verify row count
+    try:
+        df = pd.read_parquet(data_path, engine='pyarrow')
+        if len(df) != manifest['row_count']:
+            return {"status": "abstain", "metrics": None, "reason": "Row count mismatch"}
+    except Exception as e:
+        return {"status": "abstain", "metrics": None, "reason": f"Error reading data: {str(e)}"}
+
+    # Step 4: Apply schema changes
+    schema_changes = manifest.get('schema_changes', [])
+    for change in schema_changes:
+        if change['type'] == 'rename':
+            df.rename(columns={change['from']: change['to']}, inplace=True)
+
+    # Step 5: Verify pickup timestamps within reporting period
+    reporting_period = pd.Timestamp(manifest['reporting_period']['start'])
+    reporting_end = pd.Timestamp(manifest['reporting_period']['end'])
+    if not (df['tpep_pickup_datetime'] >= reporting_period).all() or not (df['tpep_pickup_datetime'] < reporting_end).all():
+        return {"status": "abstain", "metrics": None, "reason": "Pickup timestamps out of reporting period"}
+
+    # Step 6: Verify data contract rules
+    required_columns = {'record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount'}
+    if not required_columns.issubset(df.columns):
+        return {"status": "abstain", "metrics": None, "reason": "Missing required columns"}
+    if not (df['fare_amount'] >= 0).all() or not (df['fare_amount'] <= 1000).all():
+        return {"status": "abstain", "metrics": None, "reason": "Invalid fare_amount values"}
+    if not (df['trip_distance'] > 0).all() or not (df['trip_distance'] <= 100).all():
+        return {"status": "abstain", "metrics": None, "reason": "Invalid trip_distance values"}
+    if not (df['payment_type'].isin([0, 1, 2, 3, 4, 5, 6])).all():
+        return {"status": "abstain", "metrics": None, "reason": "Invalid payment_type values"}
+
+    # Step 7: Remove duplicates
+    df = df.drop_duplicates()
+
+    # Step 8: Compute metrics
+    trip_count = len(df)
+    total_fare = df['fare_amount'].sum()
+    mean_fare = df['fare_amount'].mean()
+    mean_trip_distance = df['trip_distance'].mean()
+    card_share = (df['payment_type'] == 1).mean()
+
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": trip_count,
+            "total_fare": total_fare,
+            "mean_fare": mean_fare,
+            "mean_trip_distance": mean_trip_distance,
+            "card_share": card_share
+        },
+        "reason": ""
+    }
+```

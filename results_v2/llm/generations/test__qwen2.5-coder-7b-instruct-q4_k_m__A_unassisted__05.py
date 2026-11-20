@@ -1,0 +1,32 @@
+import pandas as pd
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Read the Parquet file
+        df = pd.read_parquet(data_path)
+        
+        # Calculate metrics
+        trip_count = df.shape[0]
+        total_fare = df['fare_amount'].sum()
+        mean_fare = df['fare_amount'].mean()
+        mean_trip_distance = df['trip_distance'].mean()
+        card_share = (df['payment_type'] == 2).mean()
+        
+        # Return the result
+        return {
+            "status": "ok",
+            "metrics": {
+                "trip_count": trip_count,
+                "total_fare": total_fare,
+                "mean_fare": mean_fare,
+                "mean_trip_distance": mean_trip_distance,
+                "card_share": card_share
+            },
+            "reason": ""
+        }
+    except Exception as e:
+        return {
+            "status": "abstain",
+            "metrics": None,
+            "reason": str(e)
+        }

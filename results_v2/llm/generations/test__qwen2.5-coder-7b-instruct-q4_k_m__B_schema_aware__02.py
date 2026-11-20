@@ -1,0 +1,50 @@
+import pandas as pd
+from datetime import datetime
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Load data from Parquet file
+        df = pd.read_parquet(data_path)
+        
+        # Load manifest from JSON file
+        with open(manifest_path, 'r') as f:
+            manifest = pd.read_json(f)
+        
+        # Validate required columns
+        required_columns = ['record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount']
+        if not all(col in df.columns for col in required_columns):
+            return {"status": "abstain", "metrics": None, "reason": "Missing required columns"}
+        
+        # Validate data types
+        if not all(df[col].notnull() for col in required_columns):
+            return {"status": "abstain", "metrics": None, "reason": "Null values in required columns"}
+        
+        # Validate timestamp range
+        reporting_period = pd.Interval(datetime.fromisoformat(manifest['reporting_period']['start']),
+                                     datetime.fromisoformat(manifest['reporting_period']['end']),
+                                     closed='left')
+        if not all(reporting_period.contains(df['tpep_pickup_datetime'])):
+            return {"status": "abstain", "metrics": None, "reason": "Trip datetime out of reporting period"}
+        
+        # Handle schema changes
+        schema_changes = manifest.get('schema_changes', [])
+        for change in schema_changes:
+            if change['type'] == 'rename':
+                df.rename(columns={change['from']: change['to']}, inplace=True)
+        
+        # Remove duplicate records
+        df = df.drop_duplicates()
+        
+        # Calculate metrics
+        metrics = {
+            "trip_count": len(df),
+            "total_fare": df['fare_amount'].sum(),
+            "mean_fare": df['fare_amount'].mean(),
+            "mean_trip_distance": df['trip_distance'].mean(),
+            "card_share": (df['payment_type'] == 1).mean()
+        }
+        
+        return {"status": "ok", "metrics": metrics, "reason": ""}
+    
+    except Exception as e:
+        return {"status": "abstain", "metrics": None, "reason": str(e)}

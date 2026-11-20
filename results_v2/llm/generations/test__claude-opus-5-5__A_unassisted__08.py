@@ -1,0 +1,368 @@
+"""Monthly summary of NYC TLC yellow taxi trips, with defensive validation."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import re
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+REQUIRED = [
+    "tpep_pickup_datetime",
+    "trip_distance",
+    "payment_type",
+    "fare_amount",
+]
+
+ROWCOUNT_KEYS = {
+    "row_count", "rows", "num_rows", "n_rows", "nrows", "record_count",
+    "records", "num_records", "n_records", "expected_rows", "expected_row_count",
+    "total_rows", "row_total", "rowcount", "number_of_rows", "trip_count",
+    "num_trips", "n_trips", "expected_trip_count",
+}
+BAD_STATUS_WORDS = (
+    "incomplete", "partial", "draft", "fail", "invalid", "corrupt", "deprecat",
+    "retract", "supersed", "prelim", "in_progress", "in progress", "pending",
+    "truncat", "withdrawn", "error", "broken", "obsolete", "do not use",
+    "do_not_use", "embargo", "quarantin",
+)
+STATUS_KEYS = {"status", "state", "quality", "validation", "validation_status",
+               "data_status", "release_status", "quality_status", "lifecycle"}
+TRUE_BAD_FLAGS = {"partial", "is_partial", "truncated", "is_truncated", "deprecated",
+                  "is_deprecated", "retracted", "superseded", "is_superseded",
+                  "incomplete", "is_incomplete", "corrupt", "corrupted",
+                  "do_not_use", "withdrawn", "draft", "is_draft", "preliminary",
+                  "is_preliminary", "quarantined"}
+FALSE_BAD_FLAGS = {"complete", "is_complete", "validated", "is_validated", "final",
+                   "is_final", "valid", "is_valid", "passed", "qa_passed",
+                   "quality_passed", "approved", "verified"}
+
+
+def _abstain(reason: str) -> dict:
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _flatten(obj: Any, path: tuple = ()) -> list:
+    out = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out.extend(_flatten(v, path + (str(k),)))
+    elif isinstance(obj, list):
+        if all(not isinstance(x, (dict, list)) for x in obj):
+            out.append((path, obj))
+        for i, v in enumerate(obj):
+            if isinstance(v, (dict, list)):
+                out.extend(_flatten(v, path + (str(i),)))
+    else:
+        out.append((path, obj))
+    return out
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
+
+
+def _file_hashes(path: str) -> dict:
+    hs = {"md5": hashlib.md5(), "sha1": hashlib.sha1(), "sha256": hashlib.sha256(),
+          "sha512": hashlib.sha512()}
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            for h in hs.values():
+                h.update(chunk)
+    return {k: v.hexdigest().lower() for k, v in hs.items()}
+
+
+def _parse_month(val: Any):
+    if not isinstance(val, str):
+        return None
+    m = re.fullmatch(r"\s*(\d{4})[-_/]?(\d{2})\s*", val)
+    if m:
+        y, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= mo <= 12:
+            return y, mo
+    return None
+
+
+def _to_float(v: Any):
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        try:
+            return float(v.replace(",", "").strip())
+        except ValueError:
+            return None
+    return None
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        return _analyze(data_path, manifest_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        return _abstain(f"unexpected error: {type(exc).__name__}")
+
+
+def _analyze(data_path: str, manifest_path: str) -> dict:
+    # ---------------- manifest ----------------
+    if not os.path.isfile(manifest_path):
+        return _abstain("manifest missing")
+    try:
+        with open(manifest_path, "r", encoding="utf-8-sig") as f:
+            manifest = json.load(f)
+    except Exception:
+        return _abstain("manifest unreadable")
+    if not isinstance(manifest, dict):
+        return _abstain("manifest has unexpected structure")
+
+    flat = _flatten(manifest)
+
+    # status / flags
+    for path, val in flat:
+        if not path:
+            continue
+        leaf = _norm(path[-1])
+        if isinstance(val, bool):
+            if leaf in TRUE_BAD_FLAGS and val:
+                return _abstain(f"manifest flags data as {leaf}")
+            if leaf in FALSE_BAD_FLAGS and not val:
+                return _abstain(f"manifest flags data as not {leaf}")
+        elif isinstance(val, str) and leaf in STATUS_KEYS:
+            low = val.lower()
+            if any(w in low for w in BAD_STATUS_WORDS):
+                return _abstain(f"manifest status '{val}'")
+
+    # ---------------- data file ----------------
+    if not os.path.isfile(data_path):
+        return _abstain("data file missing")
+
+    # checksums
+    hashes = None
+    for path, val in flat:
+        if not path or not isinstance(val, str):
+            continue
+        pstr = _norm("_".join(path))
+        if not any(t in pstr for t in ("sha", "md5", "checksum", "hash", "digest")):
+            continue
+        hexval = val.strip().lower()
+        if ":" in hexval:
+            hexval = hexval.split(":", 1)[1].strip()
+        if not re.fullmatch(r"[0-9a-f]{32}|[0-9a-f]{40}|[0-9a-f]{64}|[0-9a-f]{128}", hexval):
+            continue
+        if hashes is None:
+            hashes = _file_hashes(data_path)
+        algo = {32: "md5", 40: "sha1", 64: "sha256", 128: "sha512"}[len(hexval)]
+        if hashes[algo] != hexval:
+            return _abstain("data file checksum does not match manifest")
+
+    try:
+        df = pd.read_parquet(data_path)
+    except Exception:
+        return _abstain("data file unreadable")
+
+    cols_norm = {_norm(c): c for c in df.columns}
+    rename = {}
+    for req in REQUIRED + ["record_id"]:
+        if req not in df.columns and _norm(req) in cols_norm:
+            rename[cols_norm[_norm(req)]] = req
+    if rename:
+        df = df.rename(columns=rename)
+    missing = [c for c in REQUIRED if c not in df.columns]
+
+    # unit hints from column names
+    fare_factor = 1.0
+    dist_factor = 1.0
+    if "fare_amount" in missing:
+        for alt in ("fare_amount_cents", "fare_cents"):
+            if alt in df.columns:
+                df["fare_amount"] = pd.to_numeric(df[alt], errors="coerce") / 100.0
+                missing.remove("fare_amount")
+                break
+    if "trip_distance" in missing:
+        for alt, fac in (("trip_distance_km", 1 / 1.609344), ("trip_distance_miles", 1.0)):
+            if alt in df.columns:
+                df["trip_distance"] = pd.to_numeric(df[alt], errors="coerce") * fac
+                missing.remove("trip_distance")
+                break
+    if missing:
+        return _abstain(f"missing required columns: {', '.join(missing)}")
+
+    n_raw = len(df)
+    if n_raw == 0:
+        return _abstain("no records")
+
+    # duplicates
+    n_dedup = n_raw
+    if "record_id" in df.columns:
+        if df["record_id"].isna().any():
+            pass
+        dup = df["record_id"].notna() & df.duplicated(subset=["record_id"], keep="first")
+        if dup.any():
+            df = df.loc[~dup].copy()
+            n_dedup = len(df)
+    else:
+        exact = df.duplicated(keep="first")
+        if exact.any():
+            df = df.loc[~exact].copy()
+            n_dedup = len(df)
+
+    # row count check
+    for path, val in flat:
+        if not path:
+            continue
+        leaf = _norm(path[-1])
+        if leaf in ROWCOUNT_KEYS:
+            exp = _to_float(val)
+            if exp is None or exp != int(exp):
+                continue
+            exp = int(exp)
+            if exp not in (n_raw, n_dedup):
+                return _abstain(f"row count {n_raw} does not match manifest ({exp})")
+
+    # units / currency from manifest
+    for path, val in flat:
+        if not isinstance(val, str) or not path:
+            continue
+        pstr = _norm("_".join(path))
+        low = val.lower().strip()
+        if "currency" in pstr:
+            if low and low not in ("usd", "us$", "$", "us dollar", "us dollars", "dollar",
+                                   "dollars", "usd_dollars", "united states dollar"):
+                if "cent" in low:
+                    fare_factor = 0.01
+                else:
+                    return _abstain(f"amounts in non-USD currency ({val})")
+        is_unit_path = "unit" in pstr or pstr.endswith("fare_amount") or pstr.endswith("trip_distance")
+        if not is_unit_path:
+            continue
+        if "fare" in pstr or ("amount" in pstr and "total" not in pstr and "tip" not in pstr):
+            if "cent" in low:
+                fare_factor = 0.01
+            elif re.search(r"\b(eur|gbp|cad|jpy|inr|euro)", low):
+                return _abstain(f"fare in non-USD currency ({val})")
+        if "distance" in pstr:
+            if "km" in low or "kilomet" in low:
+                dist_factor = 1 / 1.609344
+            elif re.fullmatch(r"m|meters?|metres?", low):
+                dist_factor = 1 / 1609.344
+            elif "feet" in low or low == "ft":
+                dist_factor = 1 / 5280.0
+
+    fare = pd.to_numeric(df["fare_amount"], errors="coerce").astype("float64") * fare_factor
+    dist = pd.to_numeric(df["trip_distance"], errors="coerce").astype("float64") * dist_factor
+
+    # pickup month validation
+    pickup = pd.to_datetime(df["tpep_pickup_datetime"], errors="coerce")
+    if getattr(pickup.dt, "tz", None) is not None:
+        pickup = pickup.dt.tz_convert("America/New_York").dt.tz_localize(None)
+    if pickup.isna().mean() > 0.05:
+        return _abstain("too many unparseable pickup timestamps")
+
+    target = None
+    for path, val in flat:
+        if not path:
+            continue
+        leaf = _norm(path[-1])
+        if leaf in ("month", "period", "year_month", "data_month", "coverage_month",
+                    "reporting_month", "reporting_period", "data_period", "yyyymm"):
+            pm = _parse_month(val)
+            if pm:
+                target = pm
+                break
+    if target is None:
+        y = m = None
+        for path, val in flat:
+            if not path:
+                continue
+            leaf = _norm(path[-1])
+            fv = _to_float(val)
+            if leaf == "year" and fv is not None:
+                y = int(fv)
+            elif leaf == "month" and fv is not None:
+                m = int(fv)
+        if y and m and 1 <= m <= 12:
+            target = (y, m)
+
+    keep = pd.Series(True, index=df.index)
+    if target is not None:
+        y, m = target
+        in_month = (pickup.dt.year == y) & (pickup.dt.month == m)
+        frac = float(in_month.mean())
+        if frac < 0.95:
+            return _abstain(f"data does not cover manifest month {y:04d}-{m:02d}")
+        keep = in_month
+    else:
+        valid = pickup.dropna()
+        if len(valid):
+            months = valid.dt.to_period("M").value_counts(normalize=True)
+            if months.iloc[0] < 0.9:
+                return _abstain("data spans multiple months; period ambiguous")
+            top = months.index[0]
+            keep = pickup.dt.to_period("M") == top
+
+    fare = fare[keep]
+    dist = dist[keep]
+    pay = df.loc[keep, "payment_type"]
+    n = int(keep.sum())
+    if n == 0:
+        return _abstain("no trips in period")
+
+    if fare.isna().mean() > 0.05:
+        return _abstain("too many missing fare values")
+    if dist.isna().mean() > 0.05:
+        return _abstain("too many missing trip distances")
+    if not np.isfinite(fare.dropna()).all() or not np.isfinite(dist.dropna()).all():
+        return _abstain("non-finite values in fare or distance")
+
+    # plausibility check (detect unexplained unit problems)
+    med_fare = float(fare.median())
+    if med_fare > 150 or med_fare < 1:
+        return _abstain("fare values implausible for USD (unit mismatch?)")
+    med_dist = float(dist.median())
+    if med_dist > 50:
+        return _abstain("trip distances implausible for miles (unit mismatch?)")
+
+    # payment type: credit card
+    card_codes = set()
+    for path, val in flat:
+        pstr = _norm("_".join(path)) if path else ""
+        if "payment" in pstr and isinstance(val, str) and "credit" in val.lower():
+            leaf = path[-1]
+            if re.fullmatch(r"-?\d+", str(leaf)):
+                card_codes.add(str(int(leaf)))
+    if isinstance(manifest, dict):
+        for path, val in flat:
+            pass
+    if not card_codes:
+        card_codes = {"1"}
+
+    def _is_card(v: Any) -> bool:
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            return False
+        if isinstance(v, (int, np.integer)) or (isinstance(v, (float, np.floating)) and float(v).is_integer()):
+            return str(int(v)) in card_codes
+        s = str(v).strip().lower()
+        if re.fullmatch(r"-?\d+(\.0+)?", s):
+            return str(int(float(s))) in card_codes
+        return "credit" in s or s in ("card", "crd", "cc", "credit_card")
+
+    pay_vals = pay.tolist()
+    card = sum(1 for v in pay_vals if _is_card(v))
+
+    total_fare = float(fare.sum(skipna=True))
+    metrics = {
+        "trip_count": n,
+        "total_fare": total_fare,
+        "mean_fare": float(fare.mean(skipna=True)),
+        "mean_trip_distance": float(dist.mean(skipna=True)),
+        "card_share": card / n,
+    }
+    for k, v in metrics.items():
+        if isinstance(v, float) and not math.isfinite(v):
+            return _abstain(f"metric {k} not finite")
+    return {"status": "ok", "metrics": metrics, "reason": ""}

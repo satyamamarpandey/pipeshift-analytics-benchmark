@@ -1,0 +1,73 @@
+```python
+import pandas as pd
+import pyarrow.parquet as pq
+from datetime import datetime, timezone
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Load manifest
+        with open(manifest_path, 'r') as f:
+            manifest = pd.read_json(f)
+        
+        # Verify manifest
+        if not all([key in manifest for key in ['dataset', 'snapshot_id', 'snapshot_version', 'reporting_period', 'file', 'file_sha256', 'row_count', 'columns', 'units', 'schema_changes', 'description']]):
+            return {"status": "abstain", "metrics": None, "reason": "Manifest is missing required fields."}
+        
+        # Verify file integrity
+        file_info = manifest['file']
+        with open(data_path, 'rb') as f:
+            file_sha256 = f.read()
+        if file_info['sha256'] != file_sha256.hex():
+            return {"status": "abstain", "metrics": None, "reason": "File integrity check failed."}
+        
+        # Verify row count
+        row_count = manifest['row_count']
+        table = pq.read_table(data_path)
+        if table.num_rows != row_count:
+            return {"status": "abstain", "metrics": None, "reason": "Row count mismatch."}
+        
+        # Verify columns
+        columns = manifest['columns']
+        schema_changes = manifest.get('schema_changes', [])
+        expected_columns = [col['name'] for col in columns]
+        for change in schema_changes:
+            if change['type'] == 'rename':
+                expected_columns = [change['to'] if col == change['from'] else col for col in expected_columns]
+        if list(table.schema.names) != expected_columns:
+            return {"status": "abstain", "metrics": None, "reason": "Column mismatch."}
+        
+        # Verify pickup timestamps
+        reporting_period = manifest['reporting_period']
+        timezone = timezone(reporting_period['timezone'])
+        for timestamp in table['tpep_pickup_datetime']:
+            if timestamp < reporting_period['start'].replace(tzinfo=timezone) or timestamp >= reporting_period['end'].replace(tzinfo=timezone):
+                return {"status": "abstain", "metrics": None, "reason": "Invalid timestamp."}
+        
+        # Apply schema changes
+        for change in schema_changes:
+            if change['type'] == 'rename':
+                table = table.rename_columns({change['from']: change['to']})
+        
+        # Apply data contract rules
+        required_columns = ['record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount']
+        if not all([col in table for col in required_columns]):
+            return {"status": "abstain", "metrics": None, "reason": "Missing required columns."}
+        if not all([table[col].notnull().all() for col in required_columns]):
+            return {"status": "abstain", "metrics": None, "reason": "Null values in required columns."}
+        if not all([0 < table['trip_distance'][i] <= 100 for i in range(len(table))]):
+            return {"status": "abstain", "metrics": None, "reason": "Invalid trip distance."}
+        if not all([0 <= table['fare_amount'][i] <= 1000 for i in range(len(table))]):
+            return {"status": "abstain", "metrics": None, "reason": "Invalid fare amount."}
+        
+        # Compute metrics
+        trip_count = len(table)
+        total_fare = table['fare_amount'].sum()
+        mean_fare = table['fare_amount'].mean()
+        mean_trip_distance = table['trip_distance'].mean()
+        card_share = (table['payment_type'] == 1).mean()
+        
+        return {"status": "ok", "metrics": {"trip_count": trip_count, "total_fare": total_fare, "mean_fare": mean_fare, "mean_trip_distance": mean_trip_distance, "card_share": card_share}, "reason": ""}
+    
+    except Exception as e:
+        return {"status": "abstain", "metrics": None, "reason": str(e)}
+```

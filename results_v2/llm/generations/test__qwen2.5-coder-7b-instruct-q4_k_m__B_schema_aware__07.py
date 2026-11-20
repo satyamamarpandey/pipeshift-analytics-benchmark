@@ -1,0 +1,53 @@
+import pandas as pd
+import pyarrow.parquet as pq
+from pyarrow import json
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Load data
+        data = pq.read_table(data_path).to_pandas()
+        
+        # Load manifest
+        with open(manifest_path, 'r') as f:
+            manifest = json.read_json(f).to_pydict()
+        
+        # Apply schema changes
+        for change in manifest.get('schema_changes', []):
+            if change['type'] == 'rename':
+                data.rename(columns={change['from']: change['to']}, inplace=True)
+        
+        # Validate data
+        required_columns = {'record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount'}
+        if not required_columns.issubset(data.columns):
+            return {"status": "abstain", "metrics": None, "reason": "Missing required columns"}
+        
+        data = data[required_columns].dropna()
+        
+        # Filter by reporting period
+        reporting_period = pd.to_datetime(manifest['reporting_period'])
+        data = data[data['tpep_pickup_datetime'] >= reporting_period]
+        
+        # Remove duplicates
+        data = data.drop_duplicates()
+        
+        # Calculate metrics
+        trip_count = len(data)
+        total_fare = data['fare_amount'].sum()
+        mean_fare = data['fare_amount'].mean()
+        mean_trip_distance = data['trip_distance'].mean()
+        card_share = (data['payment_type'] == 1).mean()
+        
+        return {
+            "status": "ok",
+            "metrics": {
+                "trip_count": trip_count,
+                "total_fare": total_fare,
+                "mean_fare": mean_fare,
+                "mean_trip_distance": mean_trip_distance,
+                "card_share": card_share
+            },
+            "reason": ""
+        }
+    
+    except Exception as e:
+        return {"status": "abstain", "metrics": None, "reason": str(e)}

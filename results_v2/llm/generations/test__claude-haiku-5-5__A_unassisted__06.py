@@ -1,0 +1,155 @@
+import hashlib
+import json
+import math
+
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+
+
+REQUIRED_COLUMNS = [
+    "record_id",
+    "fare_amount",
+    "trip_distance",
+    "payment_type",
+]
+
+CREDIT_CARD_CODE = 1  # NYC TLC data dictionary: 1 = credit card
+
+SHA256_KEYS = {"sha256", "checksum_sha256", "data_sha256"}
+ROW_COUNT_KEYS = {"row_count", "num_rows", "record_count", "rows"}
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _find_key(obj, names):
+    """Return the first value whose key (case-insensitive) is in names, searching recursively."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(k, str) and k.lower() in names:
+                return True, v
+        for v in obj.values():
+            found, val = _find_key(v, names)
+            if found:
+                return True, val
+    elif isinstance(obj, list):
+        for item in obj:
+            found, val = _find_key(item, names)
+            if found:
+                return True, val
+    return False, None
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    # Load and parse the manifest.
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception:
+        return _abstain("manifest could not be read or parsed as JSON")
+    if not isinstance(manifest, dict):
+        return _abstain("manifest is not a JSON object")
+
+    # Verify the data file against the manifest checksum, if one is published.
+    found, expected_sha = _find_key(manifest, SHA256_KEYS)
+    if found:
+        if not isinstance(expected_sha, str):
+            return _abstain("manifest checksum entry is not a string")
+        try:
+            actual_sha = _sha256_file(data_path)
+        except Exception:
+            return _abstain("data file could not be read for checksum verification")
+        if actual_sha.lower() != expected_sha.strip().lower():
+            return _abstain("data file checksum does not match manifest")
+
+    # Read the required columns.
+    try:
+        table = pq.read_table(data_path, columns=REQUIRED_COLUMNS)
+    except Exception:
+        return _abstain("data file could not be read or required columns are missing")
+
+    n = table.num_rows
+
+    # Verify the row count against the manifest, if one is published.
+    found, expected_rows = _find_key(manifest, ROW_COUNT_KEYS)
+    if found:
+        if not isinstance(expected_rows, int) or isinstance(expected_rows, bool):
+            return _abstain("manifest row count entry is not an integer")
+        if expected_rows != n:
+            return _abstain("data row count does not match manifest")
+
+    if n == 0:
+        return _abstain("data file contains no trips")
+
+    record_id = table.column("record_id")
+    fare_raw = table.column("fare_amount")
+    dist_raw = table.column("trip_distance")
+    pay_raw = table.column("payment_type")
+
+    # Required fields must be fully populated.
+    for name, col in (
+        ("record_id", record_id),
+        ("fare_amount", fare_raw),
+        ("trip_distance", dist_raw),
+        ("payment_type", pay_raw),
+    ):
+        if col.null_count > 0:
+            return _abstain(f"column {name} contains null values")
+
+    # record_id must identify trips uniquely.
+    distinct_ids = pc.count_distinct(record_id, mode="all").as_py()
+    if distinct_ids != n:
+        return _abstain("record_id is not unique across rows")
+
+    # Type checks.
+    if not (pa.types.is_integer(pay_raw.type)):
+        return _abstain("payment_type is not an integer code")
+    for name, col in (("fare_amount", fare_raw), ("trip_distance", dist_raw)):
+        if not (pa.types.is_integer(col.type) or pa.types.is_floating(col.type)
+                or pa.types.is_decimal(col.type)):
+            return _abstain(f"column {name} is not numeric")
+
+    try:
+        fare = pc.cast(fare_raw, pa.float64())
+        dist = pc.cast(dist_raw, pa.float64())
+    except Exception:
+        return _abstain("numeric columns could not be converted to float64")
+
+    # Values must be finite.
+    if not pc.all(pc.is_finite(fare)).as_py():
+        return _abstain("fare_amount contains non-finite values")
+    if not pc.all(pc.is_finite(dist)).as_py():
+        return _abstain("trip_distance contains non-finite values")
+
+    total_fare = pc.sum(fare).as_py()
+    mean_fare = total_fare / n
+    mean_trip_distance = pc.mean(dist).as_py()
+
+    credit_flags = pc.equal(pay_raw, pa.scalar(CREDIT_CARD_CODE, type=pay_raw.type))
+    credit_count = pc.sum(pc.cast(credit_flags, pa.int64())).as_py() or 0
+    card_share = credit_count / n
+
+    if not all(math.isfinite(v) for v in (total_fare, mean_fare, mean_trip_distance, card_share)):
+        return _abstain("computed metrics are not finite")
+
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": int(n),
+            "total_fare": float(total_fare),
+            "mean_fare": float(mean_fare),
+            "mean_trip_distance": float(mean_trip_distance),
+            "card_share": float(card_share),
+        },
+        "reason": "",
+    }

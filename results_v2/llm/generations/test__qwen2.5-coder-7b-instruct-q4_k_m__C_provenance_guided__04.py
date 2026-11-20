@@ -1,0 +1,70 @@
+import json
+import pandas as pd
+from pyarrow.parquet import read_table
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Load manifest
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+
+        # Verify manifest
+        if not manifest or 'file_sha256' not in manifest:
+            return {"status": "abstain", "metrics": None, "reason": "Invalid manifest"}
+
+        # Load data
+        table = read_table(data_path)
+        df = table.to_pandas()
+
+        # Verify data integrity
+        if df.shape[0] != manifest['row_count']:
+            return {"status": "abstain", "metrics": None, "reason": "Row count mismatch"}
+
+        # Apply schema changes
+        for change in manifest.get('schema_changes', []):
+            if change['type'] == 'rename':
+                df.rename(columns={change['from']: change['to']}, inplace=True)
+
+        # Verify required columns and types
+        required_columns = ['record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount']
+        for col in required_columns:
+            if col not in df.columns:
+                return {"status": "abstain", "metrics": None, "reason": f"Missing column: {col}"}
+            if df[col].dtype.name != 'float64':
+                return {"status": "abstain", "metrics": None, "reason": f"Incorrect type for {col}"}
+
+        # Verify timestamp range
+        if not (manifest['reporting_period']['start'] <= df['tpep_pickup_datetime'] < manifest['reporting_period']['end']):
+            return {"status": "abstain", "metrics": None, "reason": "Timestamp out of range"}
+
+        # Verify other rules
+        if df['trip_distance'].le(0).any() or df['trip_distance'].gt(100).any():
+            return {"status": "abstain", "metrics": None, "reason": "Invalid trip distance"}
+        if df['fare_amount'].lt(0).any() or df['fare_amount'].gt(1000).any():
+            return {"status": "abstain", "metrics": None, "reason": "Invalid fare amount"}
+        if df['payment_type'].isin([4, 5, 6]).any():
+            return {"status": "abstain", "metrics": None, "reason": "Invalid payment type"}
+        if df.duplicated(subset=['record_id']).any():
+            return {"status": "abstain", "metrics": None, "reason": "Duplicate records found"}
+
+        # Calculate metrics
+        trip_count = df.shape[0]
+        total_fare = df['fare_amount'].sum()
+        mean_fare = df['fare_amount'].mean()
+        mean_trip_distance = df['trip_distance'].mean()
+        card_share = (df['payment_type'] == 1).mean()
+
+        return {
+            "status": "ok",
+            "metrics": {
+                "trip_count": trip_count,
+                "total_fare": total_fare,
+                "mean_fare": mean_fare,
+                "mean_trip_distance": mean_trip_distance,
+                "card_share": card_share
+            },
+            "reason": ""
+        }
+
+    except Exception as e:
+        return {"status": "abstain", "metrics": None, "reason": str(e)}

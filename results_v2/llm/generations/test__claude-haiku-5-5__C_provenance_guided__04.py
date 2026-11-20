@@ -1,0 +1,322 @@
+"""Monthly summary of NYC TLC yellow taxi trips, gated by snapshot verification.
+
+Public entry point: analyze(data_path, manifest_path) -> dict.
+The module never prints, prompts, or writes files.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+from zoneinfo import ZoneInfo
+
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
+
+_LOCAL_TZ = "America/New_York"
+_CONTRACT_COLUMNS = (
+    "record_id",
+    "VendorID",
+    "tpep_pickup_datetime",
+    "tpep_dropoff_datetime",
+    "PULocationID",
+    "DOLocationID",
+    "trip_distance",
+    "payment_type",
+    "fare_amount",
+    "tip_amount",
+    "total_amount",
+)
+_REQUIRED_COLUMNS = (
+    "record_id",
+    "tpep_pickup_datetime",
+    "trip_distance",
+    "payment_type",
+    "fare_amount",
+)
+_PAYMENT_CODES = [0, 1, 2, 3, 4, 5, 6]
+_MANIFEST_FIELDS = (
+    "dataset",
+    "snapshot_id",
+    "snapshot_version",
+    "reporting_period",
+    "file",
+    "file_sha256",
+    "row_count",
+    "columns",
+    "units",
+    "schema_changes",
+    "description",
+)
+_HASH_CHUNK = 1 << 20
+
+
+class _Abstain(Exception):
+    """Raised internally when a verification step fails."""
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        metrics = _compute(data_path, manifest_path)
+    except _Abstain as exc:
+        return {"status": "abstain", "metrics": None, "reason": str(exc)}
+    except Exception as exc:  # unforeseen failure: abstain rather than guess
+        return {
+            "status": "abstain",
+            "metrics": None,
+            "reason": f"verification failed: {type(exc).__name__}",
+        }
+    return {"status": "ok", "metrics": metrics, "reason": ""}
+
+
+def _compute(data_path, manifest_path):
+    # Step 1: manifest exists, is valid JSON, and has the required fields.
+    manifest = _load_manifest(manifest_path)
+    _check_units(manifest["units"])
+
+    # Step 2: integrity of the delivered bytes.
+    if not isinstance(data_path, str) or not os.path.isfile(data_path):
+        raise _Abstain("data file does not exist")
+    expected_sha = manifest["file_sha256"].strip().lower()
+    if _sha256_of(data_path) != expected_sha:
+        raise _Abstain("SHA-256 of data file does not match manifest")
+
+    # Step 3: row count.
+    if pq.read_metadata(data_path).num_rows != manifest["row_count"]:
+        raise _Abstain("row count does not match manifest")
+
+    # Step 4: columns agree with manifest after applying schema_changes.
+    table = pq.read_table(data_path)
+    frame = _canonical_frame(table, manifest)
+
+    # Step 6 (type coercion and required fields).
+    for col in _REQUIRED_COLUMNS:
+        if frame[col].isna().any():
+            raise _Abstain(f"required field {col} contains nulls")
+
+    df = pd.DataFrame(
+        {
+            "record_id": _as_int64(_numeric(frame["record_id"], "record_id"), "record_id"),
+            "VendorID": _numeric(frame["VendorID"], "VendorID"),
+            "tpep_pickup_datetime": _local_naive(frame["tpep_pickup_datetime"], "tpep_pickup_datetime"),
+            "tpep_dropoff_datetime": _local_naive(frame["tpep_dropoff_datetime"], "tpep_dropoff_datetime"),
+            "PULocationID": _numeric(frame["PULocationID"], "PULocationID"),
+            "DOLocationID": _numeric(frame["DOLocationID"], "DOLocationID"),
+            "trip_distance": _numeric(frame["trip_distance"], "trip_distance"),
+            "payment_type": _as_int64(_numeric(frame["payment_type"], "payment_type"), "payment_type"),
+            "fare_amount": _numeric(frame["fare_amount"], "fare_amount"),
+            "tip_amount": _numeric(frame["tip_amount"], "tip_amount"),
+            "total_amount": _numeric(frame["total_amount"], "total_amount"),
+        },
+        index=frame.index,
+    )
+
+    # Step 6 (valid ranges and documented codes).
+    dist = df["trip_distance"]
+    if not ((dist > 0) & (dist <= 100)).all():
+        raise _Abstain("trip_distance outside valid range (0, 100] miles")
+    fare = df["fare_amount"]
+    if not ((fare >= 0) & (fare <= 1000)).all():
+        raise _Abstain("fare_amount outside valid range [0, 1000] USD")
+    if not df["payment_type"].isin(_PAYMENT_CODES).all():
+        raise _Abstain("payment_type contains undocumented codes")
+
+    # Step 5: every pickup inside the reporting period (local time, end exclusive).
+    start, end = _reporting_bounds(manifest["reporting_period"])
+    pickup = df["tpep_pickup_datetime"]
+    if not ((pickup >= start) & (pickup < end)).all():
+        raise _Abstain("pickup timestamp outside reporting_period")
+
+    # Step 6 (replays and conflicts).
+    deduped = df.drop_duplicates(subset=list(_CONTRACT_COLUMNS), keep="first")
+    if deduped["record_id"].duplicated().any():
+        raise _Abstain("record_id appears with conflicting values")
+
+    # Metrics.
+    n = len(deduped)
+    if n == 0:
+        raise _Abstain("no trips in reporting period; means are undefined")
+
+    fares = deduped["fare_amount"].tolist()
+    distances = deduped["trip_distance"].tolist()
+    total_fare = math.fsum(fares)
+    mean_fare = total_fare / n
+    mean_distance = math.fsum(distances) / n
+    card_share = int((deduped["payment_type"] == 1).sum()) / n
+
+    return {
+        "trip_count": int(n),
+        "total_fare": float(total_fare),
+        "mean_fare": float(mean_fare),
+        "mean_trip_distance": float(mean_distance),
+        "card_share": float(card_share),
+    }
+
+
+def _load_manifest(manifest_path):
+    if not isinstance(manifest_path, str) or not os.path.isfile(manifest_path):
+        raise _Abstain("manifest does not exist")
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as fh:
+            manifest = json.load(fh)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise _Abstain("manifest is not valid JSON") from exc
+    if not isinstance(manifest, dict):
+        raise _Abstain("manifest is not a JSON object")
+    missing = [f for f in _MANIFEST_FIELDS if f not in manifest]
+    if missing:
+        raise _Abstain("manifest missing fields: " + ", ".join(missing))
+
+    period = manifest["reporting_period"]
+    if not isinstance(period, dict) or not all(
+        isinstance(period.get(k), str) for k in ("start", "end", "timezone")
+    ):
+        raise _Abstain("manifest reporting_period is malformed")
+    if not isinstance(manifest["file_sha256"], str):
+        raise _Abstain("manifest file_sha256 is malformed")
+    row_count = manifest["row_count"]
+    if isinstance(row_count, bool) or not isinstance(row_count, int) or row_count < 0:
+        raise _Abstain("manifest row_count is malformed")
+    columns = manifest["columns"]
+    if not isinstance(columns, list) or not all(
+        isinstance(c, dict) and isinstance(c.get("name"), str) for c in columns
+    ):
+        raise _Abstain("manifest columns are malformed")
+    if not isinstance(manifest["schema_changes"], list):
+        raise _Abstain("manifest schema_changes is malformed")
+    return manifest
+
+
+def _check_units(units):
+    if isinstance(units, dict):
+        expectations = {
+            "trip_distance": ("mi",),
+            "fare_amount": ("usd", "dollar"),
+            "tip_amount": ("usd", "dollar"),
+            "total_amount": ("usd", "dollar"),
+        }
+        for key, tokens in expectations.items():
+            if key in units:
+                declared = str(units[key]).lower()
+                if not any(t in declared for t in tokens):
+                    raise _Abstain(f"manifest declares unexpected units for {key}")
+        return
+    text = json.dumps(units, sort_keys=True).lower()
+    if "mi" not in text or ("usd" not in text and "dollar" not in text):
+        raise _Abstain("manifest units do not declare miles and USD")
+
+
+def _sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(_HASH_CHUNK), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _blank_to_none(value):
+    if isinstance(value, str):
+        value = value.strip()
+        return value if value else None
+    return value
+
+
+def _canonical_frame(table, manifest):
+    delivered = list(table.column_names)
+    if len(set(delivered)) != len(delivered):
+        raise _Abstain("delivered file has duplicate column names")
+
+    # delivered (new) name -> original (contract) name
+    renames = {}
+    for change in manifest["schema_changes"]:
+        if (
+            not isinstance(change, dict)
+            or change.get("type") != "rename"
+            or not isinstance(change.get("from"), str)
+            or not isinstance(change.get("to"), str)
+        ):
+            raise _Abstain("unsupported entry in schema_changes")
+        if change["to"] in renames:
+            raise _Abstain("conflicting schema_changes entries")
+        renames[change["to"]] = change["from"]
+    for new_name, old_name in renames.items():
+        if new_name not in delivered or old_name in delivered:
+            raise _Abstain("schema_changes do not match delivered columns")
+
+    canonical = [renames.get(name, name) for name in delivered]
+    manifest_names = [c["name"] for c in manifest["columns"]]
+    if len(set(manifest_names)) != len(manifest_names):
+        raise _Abstain("manifest lists duplicate columns")
+    if sorted(canonical) != sorted(manifest_names):
+        raise _Abstain("delivered columns do not match manifest after schema_changes")
+    missing = [c for c in _CONTRACT_COLUMNS if c not in canonical]
+    if missing:
+        raise _Abstain("missing contract columns: " + ", ".join(missing))
+
+    frame = table.to_pandas()
+    frame.columns = canonical
+    frame = frame.loc[:, list(_CONTRACT_COLUMNS)].copy()
+    for col in frame.columns:
+        if frame[col].dtype == object:
+            frame[col] = frame[col].map(_blank_to_none)
+    return frame.reset_index(drop=True)
+
+
+def _numeric(series, name):
+    num = pd.to_numeric(series, errors="coerce")
+    if (series.notna() & num.isna()).any():
+        raise _Abstain(f"{name} contains non-numeric values")
+    if np.isinf(num.astype("float64").to_numpy()).any():
+        raise _Abstain(f"{name} contains infinite values")
+    return num
+
+
+def _as_int64(num, name):
+    if num.isna().any():
+        raise _Abstain(f"{name} contains nulls")
+    if pd.api.types.is_integer_dtype(num):
+        return num.astype("int64")
+    vals = num.to_numpy(dtype="float64")
+    if not np.all(np.isfinite(vals)) or not np.all(np.floor(vals) == vals):
+        raise _Abstain(f"{name} must hold integer values")
+    if np.any(np.abs(vals) >= 2.0**63):
+        raise _Abstain(f"{name} is out of int64 range")
+    return pd.Series(vals.astype("int64"), index=num.index)
+
+
+def _local_naive(series, name):
+    if isinstance(series.dtype, pd.DatetimeTZDtype) or pd.api.types.is_datetime64_any_dtype(series.dtype):
+        parsed = series
+    else:
+        parsed = pd.to_datetime(series, errors="coerce", format="ISO8601")
+        if (series.notna() & parsed.isna()).any():
+            raise _Abstain(f"{name} contains unparseable timestamps")
+        if not (
+            isinstance(parsed.dtype, pd.DatetimeTZDtype)
+            or pd.api.types.is_datetime64_any_dtype(parsed.dtype)
+        ):
+            raise _Abstain(f"{name} has ambiguous timestamp encoding")
+    if isinstance(parsed.dtype, pd.DatetimeTZDtype):
+        parsed = parsed.dt.tz_convert(_LOCAL_TZ).dt.tz_localize(None)
+    return parsed
+
+
+def _reporting_bounds(period):
+    try:
+        zone = ZoneInfo(period["timezone"])
+    except Exception as exc:
+        raise _Abstain("reporting_period timezone is unknown") from exc
+    bounds = []
+    for key in ("start", "end"):
+        try:
+            ts = pd.Timestamp(period[key])
+            if ts.tzinfo is None:
+                ts = ts.tz_localize(zone)
+            ts = ts.tz_convert(_LOCAL_TZ).tz_localize(None)
+        except Exception as exc:
+            raise _Abstain(f"reporting_period {key} is invalid") from exc
+        bounds.append(ts)
+    return bounds[0], bounds[1]

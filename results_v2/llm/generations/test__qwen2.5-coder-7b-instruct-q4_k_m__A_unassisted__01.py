@@ -1,0 +1,41 @@
+import pandas as pd
+import numpy as np
+from datetime import timedelta
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Load the data from the Parquet file
+        df = pd.read_parquet(data_path)
+        
+        # Convert pickup and dropoff times to datetime objects
+        df['tpep_pickup_datetime'] = pd.to_datetime(df['tpep_pickup_datetime'])
+        df['tpep_dropoff_datetime'] = pd.to_datetime(df['tpep_dropoff_datetime'])
+        
+        # Calculate trip duration and distance
+        df['trip_duration'] = df['tpep_dropoff_datetime'] - df['tpep_pickup_datetime']
+        df['trip_distance'] = df['trip_distance']
+        
+        # Calculate metrics
+        trip_count = len(df)
+        total_fare = df['fare_amount'].sum()
+        mean_fare = df['fare_amount'].mean()
+        mean_trip_distance = df['trip_distance'].mean()
+        card_share = (df['payment_type'] == 1).mean()
+        
+        return {
+            "status": "ok",
+            "metrics": {
+                "trip_count": trip_count,
+                "total_fare": total_fare,
+                "mean_fare": mean_fare,
+                "mean_trip_distance": mean_trip_distance,
+                "card_share": card_share
+            },
+            "reason": ""
+        }
+    except Exception as e:
+        return {
+            "status": "abstain",
+            "metrics": None,
+            "reason": str(e)
+        }

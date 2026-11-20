@@ -1,0 +1,7 @@
+cohort,recipe,episodes,correct,silent_accept,scenarios_with_seed_varying_outcome
+synthetic,quick,390,120,180,0
+synthetic,schema,390,210,180,0
+synthetic,provenance,390,390,0,0
+tlc_300_row_excerpt,quick,390,120,180,0
+tlc_300_row_excerpt,schema,390,210,180,0
+tlc_300_row_excerpt,provenance,390,390,0,0

@@ -1,0 +1,130 @@
+{
+  "heldout_pairs_compared": 4320,
+  "heldout_same_outcome_fraction": 1.0,
+  "baselines_identical_outcomes": true,
+  "llm_pairs_compared": 46080,
+  "llm_same_outcome_fraction": 0.9994791666666667,
+  "llm_differences": [
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R01",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P03",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P03",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P03",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P03",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R01",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P03",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P03",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P03",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "R02",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    },
+    {
+      "gen_id": "test__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__02",
+      "fid": "P03",
+      "outcome": "invalid_output",
+      "outcome_new": "silent_error"
+    }
+  ],
+  "legacy_real_excerpt_identical": true
+}

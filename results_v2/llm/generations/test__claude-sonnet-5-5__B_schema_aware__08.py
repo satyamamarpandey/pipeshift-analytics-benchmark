@@ -1,0 +1,201 @@
+import json
+import math
+import re
+
+import pandas as pd
+import pyarrow.parquet as pq
+
+_TZ = "America/New_York"
+_REQUIRED = ["record_id", "tpep_pickup_datetime", "trip_distance",
+             "payment_type", "fare_amount"]
+_OPTIONAL = ["VendorID", "tpep_dropoff_datetime", "PULocationID",
+             "DOLocationID", "tip_amount", "total_amount"]
+_OFFSET_RE = re.compile(r"(Z|[+-]\d{2}:?\d{2}|[+-]\d{2})\s*$", re.IGNORECASE)
+
+
+class _Abstain(Exception):
+    pass
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _to_local_naive(series, name):
+    """Convert a column to naive local New York datetime64."""
+    s = series
+    if isinstance(s.dtype, pd.DatetimeTZDtype):
+        return s.dt.tz_convert(_TZ).dt.tz_localize(None).astype("datetime64[ns]")
+    if pd.api.types.is_datetime64_dtype(s.dtype):
+        return s.astype("datetime64[ns]")
+    if pd.api.types.is_numeric_dtype(s.dtype) or pd.api.types.is_bool_dtype(s.dtype):
+        raise _Abstain(f"{name} delivered as numbers with unknown unit")
+    nonnull = s.dropna()
+    if len(nonnull) and all(isinstance(v, str) for v in nonnull):
+        has_off = nonnull.map(lambda v: bool(_OFFSET_RE.search(v.strip())))
+        if has_off.all():
+            parsed = pd.to_datetime(s, utc=True, errors="coerce", format="ISO8601")
+            return parsed.dt.tz_convert(_TZ).dt.tz_localize(None).astype("datetime64[ns]")
+        if has_off.any():
+            raise _Abstain(f"{name} mixes naive and timezone-aware strings")
+        parsed = pd.to_datetime(s, errors="coerce", format="ISO8601")
+        return parsed.astype("datetime64[ns]")
+    # other objects (e.g. python date/datetime objects)
+    try:
+        parsed = pd.to_datetime(s, errors="coerce")
+    except Exception:
+        raise _Abstain(f"{name} cannot be parsed as datetime")
+    if isinstance(parsed.dtype, pd.DatetimeTZDtype):
+        parsed = parsed.dt.tz_convert(_TZ).dt.tz_localize(None)
+    return parsed.astype("datetime64[ns]")
+
+
+def _to_numeric(series, name):
+    if pd.api.types.is_bool_dtype(series.dtype):
+        raise _Abstain(f"{name} has boolean type")
+    if pd.api.types.is_numeric_dtype(series.dtype):
+        out = series
+    else:
+        out = pd.to_numeric(series, errors="coerce")
+        bad = out.isna() & series.notna()
+        if bad.any():
+            raise _Abstain(f"{name} has non-numeric values")
+    return out
+
+
+def _parse_bound(v):
+    ts = pd.Timestamp(v)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert(_TZ).tz_localize(None)
+    return ts
+
+
+def _get_period(manifest):
+    rp = manifest.get("reporting_period")
+    if rp is None:
+        raise _Abstain("manifest lacks reporting_period")
+    if isinstance(rp, dict):
+        start = rp.get("start", rp.get("from"))
+        end = rp.get("end", rp.get("to"))
+    elif isinstance(rp, (list, tuple)) and len(rp) == 2:
+        start, end = rp
+    else:
+        raise _Abstain("unrecognized reporting_period format")
+    if start is None or end is None:
+        raise _Abstain("incomplete reporting_period")
+    start, end = _parse_bound(start), _parse_bound(end)
+    if pd.isna(start) or pd.isna(end) or not start < end:
+        raise _Abstain("invalid reporting_period")
+    return start, end
+
+
+def _run(data_path, manifest_path):
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+    if not isinstance(manifest, dict):
+        raise _Abstain("manifest is not an object")
+    start, end = _get_period(manifest)
+
+    df = pq.read_table(data_path).to_pandas()
+
+    expected_rows = manifest.get("row_count", manifest.get("num_rows"))
+    if isinstance(expected_rows, int) and not isinstance(expected_rows, bool):
+        if expected_rows != len(df):
+            raise _Abstain("row count does not match manifest")
+
+    if df.columns.duplicated().any():
+        raise _Abstain("duplicate column names")
+
+    changes = manifest.get("schema_changes") or []
+    for ch in changes:
+        if not isinstance(ch, dict) or ch.get("type") != "rename":
+            raise _Abstain("unsupported schema change in manifest")
+        src, dst = ch.get("from"), ch.get("to")
+        if src in df.columns:
+            if dst in df.columns and dst != src:
+                raise _Abstain(f"rename target {dst} already exists")
+            df = df.rename(columns={src: dst})
+
+    missing = [c for c in _REQUIRED if c not in df.columns]
+    if missing:
+        raise _Abstain("missing required columns: " + ", ".join(missing))
+
+    if len(df) == 0:
+        raise _Abstain("no records")
+
+    cols = _REQUIRED + [c for c in _OPTIONAL if c in df.columns]
+    d = df[cols].copy()
+
+    for c in _REQUIRED:
+        if d[c].isna().any():
+            raise _Abstain(f"null values in required column {c}")
+
+    d["tpep_pickup_datetime"] = _to_local_naive(d["tpep_pickup_datetime"], "tpep_pickup_datetime")
+    if d["tpep_pickup_datetime"].isna().any():
+        raise _Abstain("unparseable pickup timestamps")
+    if "tpep_dropoff_datetime" in d.columns:
+        d["tpep_dropoff_datetime"] = _to_local_naive(d["tpep_dropoff_datetime"], "tpep_dropoff_datetime")
+
+    for c in ["record_id", "trip_distance", "payment_type", "fare_amount"]:
+        d[c] = _to_numeric(d[c], c)
+    for c in ["tip_amount", "total_amount"]:
+        if c in d.columns:
+            try:
+                d[c] = _to_numeric(d[c], c)
+            except _Abstain:
+                pass
+
+    for c in ["record_id", "payment_type"]:
+        v = d[c]
+        if pd.api.types.is_float_dtype(v.dtype):
+            if not (v.map(math.isfinite).all()) or (v != v.round()).any():
+                raise _Abstain(f"{c} has non-integer values")
+        d[c] = v.astype("int64") if not pd.api.types.is_integer_dtype(v.dtype) else v
+
+    for c in ["trip_distance", "fare_amount"]:
+        d[c] = d[c].astype("float64")
+        if not d[c].map(math.isfinite).all():
+            raise _Abstain(f"non-finite values in {c}")
+
+    # Replays vs conflicts
+    d = d.drop_duplicates()
+    if d["record_id"].duplicated().any():
+        raise _Abstain("conflicting records share a record_id")
+
+    # Validity rules
+    if not ((d["trip_distance"] > 0) & (d["trip_distance"] <= 100)).all():
+        raise _Abstain("trip_distance outside valid range")
+    if not ((d["fare_amount"] >= 0) & (d["fare_amount"] <= 1000)).all():
+        raise _Abstain("fare_amount outside valid range")
+    if not d["payment_type"].isin([0, 1, 2, 3, 4, 5, 6]).all():
+        raise _Abstain("invalid payment_type code")
+    pu = d["tpep_pickup_datetime"]
+    if not ((pu >= start) & (pu < end)).all():
+        raise _Abstain("trips outside reporting period")
+
+    n = len(d)
+    if n == 0:
+        raise _Abstain("no records")
+    total_fare = math.fsum(d["fare_amount"].tolist())
+    mean_dist = math.fsum(d["trip_distance"].tolist()) / n
+    card = int((d["payment_type"] == 1).sum())
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": int(n),
+            "total_fare": float(total_fare),
+            "mean_fare": float(total_fare / n),
+            "mean_trip_distance": float(mean_dist),
+            "card_share": float(card / n),
+        },
+        "reason": "",
+    }
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        return _run(data_path, manifest_path)
+    except _Abstain as e:
+        return _abstain(str(e))
+    except Exception as e:
+        return _abstain(f"could not process inputs: {type(e).__name__}: {e}")

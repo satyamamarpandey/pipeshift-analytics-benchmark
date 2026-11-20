@@ -1,0 +1,47 @@
+import pandas as pd
+import pyarrow.parquet as pq
+import numpy as np
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Load the Parquet file
+        df = pq.read_table(data_path).to_pandas()
+        
+        # Convert the datetime columns to datetime type
+        df['tpep_pickup_datetime'] = pd.to_datetime(df['tpep_pickup_datetime'])
+        df['tpep_dropoff_datetime'] = pd.to_datetime(df['tpep_dropoff_datetime'])
+        
+        # Extract month and year from the datetime columns
+        df['pickup_month'] = df['tpep_pickup_datetime'].dt.month
+        df['pickup_year'] = df['tpep_pickup_datetime'].dt.year
+        
+        # Filter for trips in New York City (PULocationID and DOLocationID within a range)
+        nyc_location_ids = range(1, 266)  # Assuming valid location IDs are between 1 and 265
+        df = df[(df['PULocationID'].isin(nyc_location_ids)) & (df['DOLocationID'].isin(nyc_location_ids))]
+        
+        # Calculate the metrics
+        trip_count = len(df)
+        total_fare = df['fare_amount'].sum()
+        mean_fare = df['fare_amount'].mean()
+        mean_trip_distance = df['trip_distance'].mean()
+        card_share = (df['payment_type'] == 1).mean()  # Payment type 1 corresponds to credit card
+        
+        # Return the results in the specified format
+        return {
+            "status": "ok",
+            "metrics": {
+                "trip_count": trip_count,
+                "total_fare": total_fare,
+                "mean_fare": mean_fare,
+                "mean_trip_distance": mean_trip_distance,
+                "card_share": card_share
+            },
+            "reason": ""
+        }
+    
+    except Exception as e:
+        return {
+            "status": "abstain",
+            "metrics": None,
+            "reason": str(e)
+        }

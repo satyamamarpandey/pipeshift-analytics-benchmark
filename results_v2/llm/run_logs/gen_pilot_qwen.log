@@ -1,0 +1,3 @@
+pilot__qwen2.5-coder-7b-instruct-q4_k_m__A_unassisted__00: ok=True code=True out_tok=254 $0.0000 total=$6.32
+pilot__qwen2.5-coder-7b-instruct-q4_k_m__B_schema_aware__00: ok=True code=True out_tok=545 $0.0000 total=$6.48
+pilot__qwen2.5-coder-7b-instruct-q4_k_m__C_provenance_guided__00: ok=True code=True out_tok=835 $0.0000 total=$6.48

@@ -1,0 +1,230 @@
+import json
+import math
+
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
+
+NY_TZ = "America/New_York"
+
+CONTRACT_COLUMNS = [
+    "record_id",
+    "VendorID",
+    "tpep_pickup_datetime",
+    "tpep_dropoff_datetime",
+    "PULocationID",
+    "DOLocationID",
+    "trip_distance",
+    "payment_type",
+    "fare_amount",
+    "tip_amount",
+    "total_amount",
+]
+REQUIRED_NON_NULL = [
+    "record_id",
+    "tpep_pickup_datetime",
+    "trip_distance",
+    "payment_type",
+    "fare_amount",
+]
+VALID_PAYMENT_TYPES = [0, 1, 2, 3, 4, 5, 6]
+CARD_PAYMENT_TYPE = 1
+
+
+class _Abstain(Exception):
+    """Raised internally when the data cannot be trusted."""
+
+
+def _abstain(reason):
+    raise _Abstain(reason)
+
+
+def _to_numeric(s, name, integer):
+    if pd.api.types.is_bool_dtype(s):
+        _abstain(f"{name}: boolean values are not allowed")
+
+    if pd.api.types.is_numeric_dtype(s):
+        out = s
+    else:
+        out = pd.to_numeric(s, errors="coerce")
+        if bool((out.isna() & s.notna()).any()):
+            _abstain(f"{name}: non-numeric values present")
+
+    if integer and pd.api.types.is_integer_dtype(out):
+        return out.astype("Int64")
+
+    arr = out.to_numpy(dtype="float64", na_value=np.nan)
+    if not bool((np.isfinite(arr) | np.isnan(arr)).all()):
+        _abstain(f"{name}: non-finite values present")
+
+    if integer:
+        vals = arr[~np.isnan(arr)]
+        if not bool(np.all(vals == np.floor(vals))):
+            _abstain(f"{name}: non-integer values present")
+        return out.astype("Int64")
+
+    return out.astype("float64")
+
+
+def _to_local_naive(s, name):
+    if pd.api.types.is_datetime64_any_dtype(s):
+        if getattr(s.dtype, "tz", None) is None:
+            return s
+        return s.dt.tz_convert(NY_TZ).dt.tz_localize(None)
+
+    if pd.api.types.is_numeric_dtype(s) or pd.api.types.is_bool_dtype(s):
+        _abstain(f"{name}: numeric values are not valid timestamps")
+
+    parsed = pd.to_datetime(s, errors="coerce", format="ISO8601")
+    if bool((parsed.isna() & s.notna()).any()):
+        _abstain(f"{name}: unparseable timestamps present")
+    if not pd.api.types.is_datetime64_any_dtype(parsed):
+        _abstain(f"{name}: mixed timezone offsets")
+
+    if getattr(parsed.dtype, "tz", None) is not None:
+        return parsed.dt.tz_convert(NY_TZ).dt.tz_localize(None)
+    return parsed
+
+
+def _manifest_timestamp(value, name):
+    if not isinstance(value, str):
+        _abstain(f"manifest {name}: not a string timestamp")
+    ts = pd.Timestamp(value)
+    if pd.isna(ts):
+        _abstain(f"manifest {name}: missing or invalid")
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert(NY_TZ).tz_localize(None)
+    return ts
+
+
+def _compute(data_path, manifest_path):
+    # ---- manifest ----
+    with open(manifest_path, "r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    if not isinstance(manifest, dict):
+        _abstain("manifest is not a JSON object")
+
+    period = manifest.get("reporting_period")
+    if not isinstance(period, dict) or "start" not in period or "end" not in period:
+        _abstain("manifest reporting_period missing")
+    start = _manifest_timestamp(period["start"], "reporting_period.start")
+    end = _manifest_timestamp(period["end"], "reporting_period.end")
+
+    changes = manifest.get("schema_changes", [])
+    if changes is None:
+        changes = []
+    if not isinstance(changes, list):
+        _abstain("manifest schema_changes is not a list")
+
+    mapping = {}
+    for ch in changes:
+        if not isinstance(ch, dict) or ch.get("type") != "rename":
+            _abstain("unsupported schema change in manifest")
+        src, dst = ch.get("from"), ch.get("to")
+        if not isinstance(src, str) or not isinstance(dst, str) or not src or not dst:
+            _abstain("malformed rename in manifest")
+        if src in mapping and mapping[src] != dst:
+            _abstain("conflicting renames in manifest")
+        mapping[src] = dst
+    targets = list(mapping.values())
+    if len(set(targets)) != len(targets):
+        _abstain("multiple renames target the same column")
+    if any(t in mapping for t in targets):
+        _abstain("chained renames are ambiguous")
+
+    # ---- data ----
+    table = pq.read_table(data_path)
+    df = table.to_pandas()
+    if df.columns.duplicated().any():
+        _abstain("duplicate column names in data")
+
+    present = set(df.columns)
+    for src, dst in mapping.items():
+        if src in present and dst in present:
+            _abstain("rename source and target both present")
+    df = df.rename(columns=mapping).reset_index(drop=True)
+
+    missing = [col for col in CONTRACT_COLUMNS if col not in df.columns]
+    if missing:
+        _abstain(f"missing contract columns: {', '.join(missing)}")
+
+    c = pd.DataFrame(
+        {
+            "record_id": _to_numeric(df["record_id"], "record_id", True),
+            "VendorID": _to_numeric(df["VendorID"], "VendorID", True),
+            "tpep_pickup_datetime": _to_local_naive(
+                df["tpep_pickup_datetime"], "tpep_pickup_datetime"
+            ),
+            "tpep_dropoff_datetime": _to_local_naive(
+                df["tpep_dropoff_datetime"], "tpep_dropoff_datetime"
+            ),
+            "PULocationID": _to_numeric(df["PULocationID"], "PULocationID", True),
+            "DOLocationID": _to_numeric(df["DOLocationID"], "DOLocationID", True),
+            "trip_distance": _to_numeric(df["trip_distance"], "trip_distance", False),
+            "payment_type": _to_numeric(df["payment_type"], "payment_type", True),
+            "fare_amount": _to_numeric(df["fare_amount"], "fare_amount", False),
+            "tip_amount": _to_numeric(df["tip_amount"], "tip_amount", False),
+            "total_amount": _to_numeric(df["total_amount"], "total_amount", False),
+        },
+        index=df.index,
+    )
+
+    # ---- required fields and domain checks ----
+    for col in REQUIRED_NON_NULL:
+        if bool(c[col].isna().any()):
+            _abstain(f"null values in required column {col}")
+
+    if not bool(((c["trip_distance"] > 0) & (c["trip_distance"] <= 100)).all()):
+        _abstain("trip_distance outside valid range (0, 100]")
+    if not bool(((c["fare_amount"] >= 0) & (c["fare_amount"] <= 1000)).all()):
+        _abstain("fare_amount outside valid range [0, 1000]")
+    if not bool(c["payment_type"].isin(VALID_PAYMENT_TYPES).all()):
+        _abstain("payment_type has codes outside 0-6")
+
+    # ---- replays and conflicts ----
+    # Identical rows (over all contract columns) are replays and count once.
+    c = c.loc[~c.duplicated(keep="first")]
+    # Same record_id with differing values is a conflict.
+    if bool(c["record_id"].duplicated().any()):
+        _abstain("conflicting records share a record_id")
+
+    # ---- reporting period ----
+    pickup = c["tpep_pickup_datetime"]
+    in_period = (pickup >= start) & (pickup < end)
+    if not bool(in_period.all()):
+        _abstain("trips with pickup outside reporting_period")
+
+    n = len(c)
+    if n == 0:
+        _abstain("no trips in reporting_period")
+
+    # ---- metrics ----
+    fares = c["fare_amount"].tolist()
+    distances = c["trip_distance"].tolist()
+    total_fare = float(math.fsum(fares))
+    mean_fare = total_fare / n
+    mean_trip_distance = float(math.fsum(distances)) / n
+    card_trips = int((c["payment_type"] == CARD_PAYMENT_TYPE).sum())
+    card_share = card_trips / n
+
+    return {
+        "trip_count": int(n),
+        "total_fare": total_fare,
+        "mean_fare": mean_fare,
+        "mean_trip_distance": mean_trip_distance,
+        "card_share": float(card_share),
+    }
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        metrics = _compute(data_path, manifest_path)
+    except _Abstain as exc:
+        return {"status": "abstain", "metrics": None, "reason": str(exc)}
+    except Exception as exc:
+        return {
+            "status": "abstain",
+            "metrics": None,
+            "reason": f"could not process inputs ({type(exc).__name__})",
+        }
+    return {"status": "ok", "metrics": metrics, "reason": ""}

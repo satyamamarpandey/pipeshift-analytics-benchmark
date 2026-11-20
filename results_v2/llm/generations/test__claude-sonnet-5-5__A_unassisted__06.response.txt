@@ -1,0 +1,135 @@
+```python
+import hashlib
+import json
+import re
+
+import numpy as np
+import pandas as pd
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _find(obj, names):
+    """Recursively find the first value whose key (lowercased) is in names."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() in names and not isinstance(v, (dict, list)):
+                return v
+        for v in obj.values():
+            r = _find(v, names)
+            if r is not None:
+                return r
+    elif isinstance(obj, list):
+        for v in obj:
+            r = _find(v, names)
+            if r is not None:
+                return r
+    return None
+
+
+def _file_hash(path, algo):
+    h = hashlib.new(algo)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as e:
+        return _abstain("manifest unreadable: %s" % type(e).__name__)
+    if not isinstance(manifest, (dict, list)):
+        return _abstain("manifest has unexpected structure")
+
+    try:
+        df = pd.read_parquet(data_path)
+    except Exception as e:
+        return _abstain("data unreadable: %s" % type(e).__name__)
+
+    required = ["record_id", "tpep_pickup_datetime", "trip_distance",
+                "payment_type", "fare_amount"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return _abstain("missing columns: %s" % ",".join(missing))
+
+    # Manifest integrity checks
+    try:
+        for algo in ("sha256", "md5", "sha1"):
+            exp = _find(manifest, {algo})
+            if isinstance(exp, str) and exp:
+                if _file_hash(data_path, algo) != exp.lower():
+                    return _abstain("data checksum does not match manifest")
+        exp_rows = _find(manifest, {"row_count", "num_rows", "rows",
+                                    "record_count", "n_rows", "trip_count"})
+        if exp_rows is not None:
+            try:
+                if int(exp_rows) != len(df):
+                    return _abstain("row count differs from manifest (%d vs %d)"
+                                    % (len(df), int(exp_rows)))
+            except (TypeError, ValueError):
+                pass
+        exp_cols = _find(manifest, {"columns"})
+        if isinstance(exp_cols, list):
+            pass
+    except Exception as e:
+        return _abstain("manifest check failed: %s" % type(e).__name__)
+
+    n_raw = len(df)
+    if n_raw == 0:
+        return _abstain("no records")
+
+    # Duplicates
+    if df["record_id"].isna().any():
+        return _abstain("null record_id values")
+    full_dups = df.duplicated(keep="first")
+    df = df[~full_dups]
+    if df["record_id"].duplicated().any():
+        return _abstain("conflicting duplicate record_id values")
+
+    # Types
+    pickup = pd.to_datetime(df["tpep_pickup_datetime"], errors="coerce")
+    fare = pd.to_numeric(df["fare_amount"], errors="coerce")
+    dist = pd.to_numeric(df["trip_distance"], errors="coerce")
+    pay = pd.to_numeric(df["payment_type"], errors="coerce")
+
+    # Target month
+    month = None
+    mval = _find(manifest, {"month", "period", "year_month", "data_month"})
+    if isinstance(mval, str):
+        m = re.search(r"(\d{4})-(\d{2})", mval)
+        if m:
+            month = pd.Period("%s-%s" % (m.group(1), m.group(2)), freq="M")
+    pm = pickup.dt.to_period("M")
+    if month is None:
+        if pm.notna().sum() == 0:
+            return _abstain("no valid pickup timestamps")
+        month = pm.mode().iloc[0]
+
+    valid = (pm == month) & fare.notna() & dist.notna() & pay.notna() \
+        & np.isfinite(fare) & np.isfinite(dist) & (fare >= 0) & (dist >= 0)
+    n_valid = int(valid.sum())
+    if n_valid == 0:
+        return _abstain("no valid records")
+    if n_valid < 0.95 * len(df):
+        return _abstain("too many invalid records (%d of %d)"
+                        % (len(df) - n_valid, len(df)))
+
+    fare = fare[valid]
+    dist = dist[valid]
+    pay = pay[valid]
+
+    total_fare = float(fare.sum())
+    metrics = {
+        "trip_count": int(n_valid),
+        "total_fare": total_fare,
+        "mean_fare": float(fare.mean()),
+        "mean_trip_distance": float(dist.mean()),
+        "card_share": float((pay == 1).sum() / n_valid),
+    }
+    return {"status": "ok", "metrics": metrics, "reason": ""}
+```

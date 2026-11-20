@@ -1,0 +1,13 @@
+model,condition,faults_all_generations_agree,mean_pairwise_agreement,within_generation_snapshot_stability
+claude-haiku-5-5,A_unassisted,0.34375,0.7520833333333333,1.0
+claude-haiku-5-5,B_schema_aware,0.90625,0.9645833333333333,0.965625
+claude-haiku-5-5,C_provenance_guided,0.59375,0.89375,0.965625
+claude-opus-5-5,A_unassisted,0.5625,0.8215277777777777,0.975
+claude-opus-5-5,B_schema_aware,0.875,0.9555555555555556,0.96875
+claude-opus-5-5,C_provenance_guided,1.0,1.0,0.96875
+claude-sonnet-5-5,A_unassisted,0.65625,0.8444444444444444,0.975
+claude-sonnet-5-5,B_schema_aware,0.84375,0.9270833333333334,0.95625
+claude-sonnet-5-5,C_provenance_guided,0.90625,0.9715277777777778,0.95
+qwen2.5-coder-7b-instruct-q4_k_m,A_unassisted,0.0,0.40694444444444444,0.990625
+qwen2.5-coder-7b-instruct-q4_k_m,B_schema_aware,0.3125,0.8625,0.996875
+qwen2.5-coder-7b-instruct-q4_k_m,C_provenance_guided,1.0,1.0,1.0

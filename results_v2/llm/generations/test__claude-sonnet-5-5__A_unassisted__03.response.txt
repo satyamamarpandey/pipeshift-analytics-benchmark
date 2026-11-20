@@ -1,0 +1,143 @@
+```python
+import json
+import hashlib
+
+import numpy as np
+import pandas as pd
+
+
+REQUIRED = [
+    "record_id", "tpep_pickup_datetime", "trip_distance",
+    "payment_type", "fare_amount",
+]
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _find(manifest, names):
+    """Case-insensitive lookup of a key, searching nested dicts."""
+    if not isinstance(manifest, dict):
+        return None
+    lower = {str(k).lower(): v for k, v in manifest.items()}
+    for n in names:
+        if n in lower:
+            return lower[n]
+    for v in manifest.values():
+        if isinstance(v, dict):
+            r = _find(v, names)
+            if r is not None:
+                return r
+    return None
+
+
+def _file_digest(path, algo):
+    h = hashlib.new(algo)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as e:
+        return _abstain(f"manifest unreadable: {type(e).__name__}")
+    if not isinstance(manifest, dict):
+        return _abstain("manifest is not a JSON object")
+
+    # Integrity checks against manifest
+    try:
+        for algo in ("sha256", "md5", "sha1"):
+            exp = _find(manifest, [algo, algo + "sum", "checksum_" + algo, algo + "_checksum"])
+            if isinstance(exp, str) and exp:
+                if _file_digest(data_path, algo).lower() != exp.strip().lower():
+                    return _abstain(f"{algo} checksum mismatch with manifest")
+    except Exception as e:
+        return _abstain(f"cannot verify checksum: {type(e).__name__}")
+
+    try:
+        df = pd.read_parquet(data_path)
+    except Exception as e:
+        return _abstain(f"data unreadable: {type(e).__name__}")
+
+    missing = [c for c in REQUIRED if c not in df.columns]
+    if missing:
+        return _abstain("missing required columns: " + ",".join(missing))
+
+    exp_rows = _find(manifest, ["row_count", "num_rows", "n_rows", "rows",
+                                "record_count", "total_rows", "trip_count"])
+    if isinstance(exp_rows, (int, float)) and not isinstance(exp_rows, bool):
+        if int(exp_rows) != len(df):
+            return _abstain(f"row count {len(df)} differs from manifest {int(exp_rows)}")
+
+    if len(df) == 0:
+        return _abstain("no records")
+
+    # Remove duplicate records
+    if df["record_id"].isna().any():
+        return _abstain("null record_id values present")
+    df = df.drop_duplicates(subset="record_id", keep="first")
+
+    # Month restriction if manifest declares one
+    pickup = pd.to_datetime(df["tpep_pickup_datetime"], errors="coerce")
+    month = _find(manifest, ["month", "period", "year_month"])
+    if isinstance(month, str) and len(month) >= 7:
+        try:
+            per = pd.Period(month[:7], freq="M")
+            inside = pickup.dt.to_period("M") == per
+            if inside.mean() < 0.5:
+                return _abstain("most records fall outside manifest month")
+            df = df[inside.values]
+        except Exception:
+            pass
+
+    fare = pd.to_numeric(df["fare_amount"], errors="coerce")
+    dist = pd.to_numeric(df["trip_distance"], errors="coerce")
+    valid = fare.notna() & dist.notna() & (fare >= 0) & (dist >= 0) \
+        & np.isfinite(fare) & np.isfinite(dist)
+    total_before = len(df)
+    if total_before == 0:
+        return _abstain("no records after filtering")
+    if (~valid).mean() > 0.05:
+        return _abstain("too many invalid fare/distance values")
+    df = df[valid.values]
+    fare = fare[valid]
+    dist = dist[valid]
+    n = len(df)
+    if n == 0:
+        return _abstain("no valid records")
+
+    # Card payment code (TLC: 1 = credit card), allow manifest mapping
+    card_codes = {1}
+    mapping = _find(manifest, ["payment_type", "payment_types", "payment_type_codes",
+                               "payment_type_mapping"])
+    if isinstance(mapping, dict):
+        found = set()
+        for k, v in mapping.items():
+            if isinstance(v, str) and "credit" in v.lower():
+                try:
+                    found.add(int(k))
+                except Exception:
+                    pass
+        if found:
+            card_codes = found
+    pt = pd.to_numeric(df["payment_type"], errors="coerce")
+    card = pt.isin(list(card_codes)).sum()
+
+    total_fare = float(fare.sum())
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": int(n),
+            "total_fare": total_fare,
+            "mean_fare": total_fare / n,
+            "mean_trip_distance": float(dist.sum()) / n,
+            "card_share": float(card) / n,
+        },
+        "reason": "",
+    }
+```

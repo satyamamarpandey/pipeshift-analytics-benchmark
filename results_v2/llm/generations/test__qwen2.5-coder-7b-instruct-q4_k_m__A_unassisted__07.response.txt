@@ -1,0 +1,59 @@
+```python
+import pandas as pd
+import pyarrow.parquet as pq
+import json
+from datetime import datetime, timedelta
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Load the Parquet file
+        df = pq.read_table(data_path).to_pandas()
+
+        # Load the manifest file
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+        metadata = manifest['metadata']
+
+        # Check for necessary columns
+        required_columns = ['VendorID', 'tpep_pickup_datetime', 'tpep_dropoff_datetime', 'trip_distance', 'payment_type', 'fare_amount']
+        if not all(col in df.columns for col in required_columns):
+            return {"status": "abstain", "metrics": None, "reason": "Missing required columns"}
+
+        # Convert tpep_pickup_datetime and tpep_dropoff_datetime to datetime
+        df['tpep_pickup_datetime'] = pd.to_datetime(df['tpep_pickup_datetime'])
+        df['tpep_dropoff_datetime'] = pd.to_datetime(df['tpep_dropoff_datetime'])
+
+        # Extract month from tpep_pickup_datetime
+        df['pickup_month'] = df['tpep_pickup_datetime'].dt.to_period('M')
+
+        # Calculate metrics
+        trip_count = len(df)
+        total_fare = df['fare_amount'].sum()
+        mean_fare = df['fare_amount'].mean()
+        mean_trip_distance = df['trip_distance'].mean()
+        card_share = (df['payment_type'] == 1).mean()  # 1 represents credit card payment
+
+        # Group by month and calculate metrics
+        monthly_summary = df.groupby('pickup_month').agg({
+            'fare_amount': 'sum',
+            'trip_distance': 'mean',
+            'payment_type': lambda x: (x == 1).mean()
+        }).reset_index()
+        monthly_summary.columns = ['pickup_month', 'total_fare', 'mean_trip_distance', 'card_share']
+
+        # Return the result
+        return {
+            "status": "ok",
+            "metrics": {
+                "trip_count": trip_count,
+                "total_fare": total_fare,
+                "mean_fare": mean_fare,
+                "mean_trip_distance": mean_trip_distance,
+                "card_share": card_share
+            },
+            "reason": ""
+        }
+
+    except Exception as e:
+        return {"status": "abstain", "metrics": None, "reason": str(e)}
+```

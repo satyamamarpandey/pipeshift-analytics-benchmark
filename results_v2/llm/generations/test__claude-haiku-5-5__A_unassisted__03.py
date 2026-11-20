@@ -1,0 +1,136 @@
+import hashlib
+import json
+import math
+import os
+
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
+
+# Columns needed for the metrics. TLC data dictionary: payment_type 1 = credit card.
+REQUIRED_COLUMNS = ("record_id", "fare_amount", "trip_distance", "payment_type")
+CREDIT_CARD_CODE = 1
+_HASH_CHUNK = 1 << 20
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(_HASH_CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _expected_integrity(manifest, basename):
+    """Return (sha256_hex_or_None, row_count_or_None) for the data file from the manifest."""
+    if not isinstance(manifest, dict):
+        return None, None
+
+    entries = []
+    if isinstance(manifest.get("files"), list):
+        entries.extend(e for e in manifest["files"] if isinstance(e, dict))
+
+    sha, rows = None, None
+    for entry in entries + [manifest]:
+        name = next(
+            (entry[k] for k in ("name", "path", "filename", "file") if isinstance(entry.get(k), str)),
+            None,
+        )
+        if name is not None:
+            if os.path.basename(name.replace("\\", "/")) != basename:
+                continue
+        elif entry is not manifest:
+            continue  # unnamed list entries cannot be matched to the data file
+
+        s = entry.get("sha256")
+        if isinstance(s, str) and sha is None:
+            sha = s.strip().lower()
+
+        r = entry.get("row_count", entry.get("num_rows"))
+        if isinstance(r, int) and not isinstance(r, bool) and rows is None:
+            rows = r
+
+    return sha, rows
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # 1. Manifest must be readable and must provide something verifiable.
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                manifest = json.load(f)
+        except (OSError, ValueError) as exc:
+            return _abstain(f"manifest could not be read or parsed: {exc.__class__.__name__}")
+
+        basename = os.path.basename(str(data_path).replace("\\", "/"))
+        expected_sha, expected_rows = _expected_integrity(manifest, basename)
+        if expected_sha is None and expected_rows is None:
+            return _abstain("manifest provides no checksum or row count to verify the data against")
+
+        # 2. Verify the data file against the manifest.
+        if not os.path.isfile(data_path):
+            return _abstain("data file does not exist")
+        if expected_sha is not None and _sha256_file(data_path) != expected_sha:
+            return _abstain("data file checksum does not match manifest")
+
+        # 3. Schema and row-count checks (metadata only).
+        schema_names = set(pq.read_schema(data_path).names)
+        missing = [c for c in REQUIRED_COLUMNS if c not in schema_names]
+        if missing:
+            return _abstain(f"missing required columns: {', '.join(missing)}")
+
+        num_rows = pq.read_metadata(data_path).num_rows
+        if expected_rows is not None and num_rows != expected_rows:
+            return _abstain("row count does not match manifest")
+        if num_rows == 0:
+            return _abstain("data contains no trips")
+
+        # 4. Load only the needed columns.
+        df = pq.read_table(data_path, columns=list(REQUIRED_COLUMNS)).to_pandas()
+
+        # 5. Data-quality checks; abstain rather than guess.
+        if df["record_id"].isna().any():
+            return _abstain("record_id contains nulls")
+        if df["record_id"].duplicated().any():
+            return _abstain("record_id contains duplicates")
+
+        for col in ("fare_amount", "trip_distance", "payment_type"):
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                return _abstain(f"{col} is not numeric")
+            if df[col].isna().any():
+                return _abstain(f"{col} contains nulls")
+
+        fares = df["fare_amount"].to_numpy(dtype=np.float64)
+        dists = df["trip_distance"].to_numpy(dtype=np.float64)
+        payments = df["payment_type"].to_numpy(dtype=np.float64)
+
+        if not (np.isfinite(fares).all() and np.isfinite(dists).all() and np.isfinite(payments).all()):
+            return _abstain("non-finite values in metric columns")
+        if not np.all(np.mod(payments, 1.0) == 0.0):
+            return _abstain("payment_type contains non-integer codes")
+
+        # 6. Compute metrics (exact summation via math.fsum; no rounding).
+        n = int(len(fares))
+        total_fare = math.fsum(fares.tolist())
+        mean_fare = total_fare / n
+        mean_trip_distance = math.fsum(dists.tolist()) / n
+        card_trips = int(np.count_nonzero(payments == CREDIT_CARD_CODE))
+        card_share = card_trips / n
+
+        return {
+            "status": "ok",
+            "metrics": {
+                "trip_count": n,
+                "total_fare": total_fare,
+                "mean_fare": mean_fare,
+                "mean_trip_distance": mean_trip_distance,
+                "card_share": card_share,
+            },
+            "reason": "",
+        }
+    except Exception as exc:  # never raise to the caller
+        return _abstain(f"unexpected error: {exc.__class__.__name__}")

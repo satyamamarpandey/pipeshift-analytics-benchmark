@@ -1,0 +1,145 @@
+import hashlib
+import json
+import math
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _find(obj, keys):
+    """Recursively find first value for any of the given lowercase keys."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() in keys:
+                return v
+        for v in obj.values():
+            r = _find(v, keys)
+            if r is not None:
+                return r
+    elif isinstance(obj, list):
+        for v in obj:
+            r = _find(v, keys)
+            if r is not None:
+                return r
+    return None
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        import pandas as pd
+        import numpy as np
+    except Exception:
+        return _abstain("required libraries unavailable")
+
+    # ---- manifest ----
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception:
+        return _abstain("manifest missing or unreadable")
+    if not isinstance(manifest, (dict, list)):
+        return _abstain("manifest malformed")
+
+    # ---- checksum ----
+    try:
+        expected_hash = _find(manifest, {"sha256", "checksum", "sha256_checksum", "file_sha256"})
+        if isinstance(expected_hash, str) and len(expected_hash.strip()) == 64:
+            h = hashlib.sha256()
+            with open(data_path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            if h.hexdigest().lower() != expected_hash.strip().lower():
+                return _abstain("data file checksum does not match manifest")
+    except Exception:
+        return _abstain("could not verify checksum")
+
+    # ---- data ----
+    try:
+        df = pd.read_parquet(data_path)
+    except Exception:
+        return _abstain("data file missing or unreadable")
+
+    required = ["record_id", "tpep_pickup_datetime", "trip_distance",
+                "payment_type", "fare_amount"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return _abstain("missing required columns: " + ",".join(missing))
+
+    # ---- units declared in manifest ----
+    units = _find(manifest, {"units", "unit"})
+    if isinstance(units, dict):
+        for k, v in units.items():
+            kl, vl = str(k).lower(), str(v).lower()
+            if "fare" in kl or "amount" in kl or "currency" in kl:
+                if vl not in ("usd", "dollar", "dollars", "$", "us_dollars"):
+                    return _abstain("fare units not USD per manifest")
+            if "dist" in kl:
+                if vl not in ("mile", "miles", "mi"):
+                    return _abstain("distance units not miles per manifest")
+    cur = _find(manifest, {"currency"})
+    if isinstance(cur, str) and cur.upper() != "USD":
+        return _abstain("currency not USD per manifest")
+
+    raw_rows = len(df)
+    exp_rows = _find(manifest, {"row_count", "num_rows", "rows", "record_count", "n_rows", "total_rows"})
+    if isinstance(exp_rows, (int, float)) and not isinstance(exp_rows, bool):
+        if int(exp_rows) != raw_rows:
+            return _abstain("row count differs from manifest (possible truncation)")
+
+    if raw_rows == 0:
+        return _abstain("no records")
+
+    # ---- cleaning ----
+    df = df.copy()
+    if df["record_id"].isna().any():
+        df = df[df["record_id"].notna()]
+    df = df.drop_duplicates(subset="record_id", keep="first")
+
+    pickup = pd.to_datetime(df["tpep_pickup_datetime"], errors="coerce")
+    df = df.assign(_pu=pickup)
+    df = df[df["_pu"].notna()]
+
+    # restrict to declared month/period
+    period = _find(manifest, {"month", "period", "year_month", "reporting_month"})
+    if isinstance(period, str) and len(period) >= 7:
+        try:
+            p = pd.Period(period[:7], freq="M")
+            df = df[df["_pu"].dt.to_period("M") == p]
+        except Exception:
+            pass
+    else:
+        # otherwise use the dominant month
+        if len(df):
+            mon = df["_pu"].dt.to_period("M")
+            df = df[mon == mon.mode().iloc[0]]
+
+    fare = pd.to_numeric(df["fare_amount"], errors="coerce")
+    dist = pd.to_numeric(df["trip_distance"], errors="coerce")
+    pay = pd.to_numeric(df["payment_type"], errors="coerce")
+
+    valid = fare.notna() & dist.notna() & np.isfinite(fare) & np.isfinite(dist) \
+        & (fare >= 0) & (dist >= 0)
+    n_before = len(df)
+    if n_before == 0:
+        return _abstain("no records in reporting period")
+    if valid.sum() < 0.9 * n_before:
+        return _abstain("too many invalid fare/distance values")
+
+    fare, dist, pay = fare[valid], dist[valid], pay[valid]
+    n = int(len(fare))
+    if n == 0:
+        return _abstain("no valid trips")
+
+    total_fare = float(fare.sum())
+    metrics = {
+        "trip_count": n,
+        "total_fare": total_fare,
+        "mean_fare": float(fare.mean()),
+        "mean_trip_distance": float(dist.mean()),
+        "card_share": float((pay == 1).sum() / n),
+    }
+    for v in metrics.values():
+        if isinstance(v, float) and not math.isfinite(v):
+            return _abstain("non-finite metric")
+    return {"status": "ok", "metrics": metrics, "reason": ""}

@@ -1,0 +1,208 @@
+{
+  "source": {
+    "dataset": "NYC TLC Yellow Taxi trip records (monthly Parquet)",
+    "study_months": "2025-01..2025-12",
+    "reference_month": "2024-12 (prior-period input only)",
+    "manifest": "data/source_manifest.json"
+  },
+  "sampling": {
+    "snapshot_rows": 5000,
+    "replicates_per_month": [
+      "A",
+      "B"
+    ],
+    "sampling_seed": 20251031,
+    "stratification": "pickup day, largest-remainder allocation",
+    "admissible_filter": {
+      "trip_distance_min_exclusive": 0.0,
+      "trip_distance_max": 100.0,
+      "fare_amount_min": 0.0,
+      "fare_amount_max": 1000.0
+    },
+    "payment_codes": {
+      "0": "Flex Fare trip",
+      "1": "Credit card",
+      "2": "Cash",
+      "3": "No charge",
+      "4": "Dispute",
+      "5": "Unknown",
+      "6": "Voided trip"
+    }
+  },
+  "metrics": [
+    "trip_count",
+    "total_fare",
+    "mean_fare",
+    "mean_trip_distance",
+    "card_share"
+  ],
+  "tolerance": {
+    "trip_count": 0,
+    "total_fare": 0.005,
+    "mean_fare": 0.005,
+    "mean_trip_distance": 0.005,
+    "card_share": 5e-05
+  },
+  "outcomes": [
+    "correct_recovery",
+    "correct_abstention",
+    "false_rejection",
+    "silent_error",
+    "unverified_accept",
+    "invalid_output"
+  ],
+  "intensity_sweep": {
+    "R01": [
+      "one",
+      0.005,
+      0.05,
+      0.25
+    ],
+    "R02": [
+      "one",
+      0.001,
+      0.01,
+      0.05
+    ],
+    "R03": [
+      "one",
+      0.002,
+      0.02,
+      0.1
+    ],
+    "R04": [
+      "one",
+      0.01,
+      0.15,
+      0.5
+    ],
+    "R05": [
+      "one",
+      0.005,
+      0.03,
+      0.2
+    ],
+    "T05": [
+      "one",
+      0.01,
+      0.1,
+      0.5
+    ],
+    "N01": [
+      "one",
+      0.005,
+      0.02,
+      0.1
+    ],
+    "P04": [
+      "one",
+      0.005,
+      0.02,
+      0.1
+    ]
+  },
+  "prompt_sha256": {
+    "A_unassisted": "834b38865e0dcaa795e42871bb59f217ef048dfd3fc4cbefc14ca08de3f40b6b",
+    "B_schema_aware": "0b939c4916e2313318914097a8a168ff4bc2a0d8f543a57b2347efba951d92aa",
+    "C_provenance_guided": "df6807674c9b37551ccf5dbe6febaf2ac50d78ffd4b3de37541046bace5ab7e3",
+    "system": "632284d3ba3f3d3749749189e2f407db055fd03142c44606c89d9820b22cde70"
+  },
+  "generation": {
+    "models": [
+      {
+        "backend": "claude-cli",
+        "provider": "Anthropic (via Claude Code CLI)",
+        "model": "claude-haiku-5-5",
+        "sampling": "provider default (temperature not settable via CLI)"
+      },
+      {
+        "backend": "claude-cli",
+        "provider": "Anthropic (via Claude Code CLI)",
+        "model": "claude-opus-5-5",
+        "sampling": "provider default (temperature not settable via CLI)"
+      },
+      {
+        "backend": "claude-cli",
+        "provider": "Anthropic (via Claude Code CLI)",
+        "model": "claude-sonnet-5-5",
+        "sampling": "provider default (temperature not settable via CLI)"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1000, max_tokens=4096, llama.cpp defaults otherwise"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1001, max_tokens=4096, llama.cpp defaults otherwise"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1002, max_tokens=4096, llama.cpp defaults otherwise"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1003, max_tokens=4096, llama.cpp defaults otherwise"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1004, max_tokens=4096, llama.cpp defaults otherwise"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1005, max_tokens=4096, llama.cpp defaults otherwise"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1006, max_tokens=4096, llama.cpp defaults otherwise"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1007, max_tokens=4096, llama.cpp defaults otherwise"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1008, max_tokens=4096, llama.cpp defaults otherwise"
+      },
+      {
+        "backend": "llamacpp",
+        "provider": "local llama.cpp server",
+        "model": "qwen2.5-coder-7b-instruct-q4_k_m",
+        "sampling": "temperature=0.8, seed=1009, max_tokens=4096, llama.cpp defaults otherwise"
+      }
+    ],
+    "generations_per_model_and_condition": 10,
+    "pilot_generations_per_model": 1
+  },
+  "evaluation": {
+    "split_test": "main-suite episodes of the 12 replicate-A snapshots (384 per generation)",
+    "split_heldout": "H01-H03 on the 12 replicate-A snapshots (36 per generation)",
+    "split_pilot": "snapshot 2025-06_B (harness check; excluded from results)",
+    "job_timeout_seconds": 30.0,
+    "workers": 8,
+    "sandbox": "pipeshift/sandbox_runner.py"
+  },
+  "statistics": {
+    "bootstrap_resamples": 10000,
+    "unit": "generation",
+    "permutation_resamples": 10000,
+    "multiplicity": "Holm over 3 contrasts per model"
+  }
+}

@@ -1,0 +1,224 @@
+```python
+import hashlib
+import json
+import math
+
+import pandas as pd
+import pyarrow.parquet as pq
+
+REQUIRED = ["record_id", "tpep_pickup_datetime", "trip_distance", "payment_type", "fare_amount"]
+CONTRACT = [
+    "record_id", "VendorID", "tpep_pickup_datetime", "tpep_dropoff_datetime",
+    "PULocationID", "DOLocationID", "trip_distance", "payment_type",
+    "fare_amount", "tip_amount", "total_amount",
+]
+MANIFEST_FIELDS = [
+    "dataset", "snapshot_id", "snapshot_version", "reporting_period", "file",
+    "file_sha256", "row_count", "columns", "units", "schema_changes", "description",
+]
+LOCAL_TZ = "America/New_York"
+
+
+class Abstain(Exception):
+    pass
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _to_local_naive(series, tz):
+    """Convert a datetime-like series to naive local time."""
+    s = series
+    if not pd.api.types.is_datetime64_any_dtype(s):
+        try:
+            s = pd.to_datetime(s, format="ISO8601")
+        except Exception:
+            try:
+                s = pd.to_datetime(series, utc=True)
+            except Exception:
+                raise Abstain("unparseable timestamps")
+    if getattr(s.dt, "tz", None) is not None:
+        s = s.dt.tz_convert(tz).dt.tz_localize(None)
+    return s
+
+
+def _to_numeric(series, name):
+    try:
+        out = pd.to_numeric(series, errors="raise")
+    except Exception:
+        raise Abstain(f"non-numeric values in {name}")
+    if out.dtype == bool or out.dtype == object:
+        raise Abstain(f"invalid type for {name}")
+    return out
+
+
+def _bound(value, tz, label):
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert(tz).tz_localize(None)
+    return ts
+
+
+def _analyze(data_path, manifest_path):
+    # 1. manifest
+    try:
+        with open(manifest_path, "rb") as f:
+            manifest = json.loads(f.read().decode("utf-8"))
+    except Exception:
+        raise Abstain("manifest missing or invalid JSON")
+    if not isinstance(manifest, dict):
+        raise Abstain("manifest is not a JSON object")
+    for k in MANIFEST_FIELDS:
+        if k not in manifest:
+            raise Abstain(f"manifest missing field {k}")
+    rp = manifest["reporting_period"]
+    if not isinstance(rp, dict) or not all(k in rp for k in ("start", "end", "timezone")):
+        raise Abstain("manifest reporting_period invalid")
+    if not isinstance(manifest["columns"], list) or not isinstance(manifest["schema_changes"], list):
+        raise Abstain("manifest columns/schema_changes invalid")
+
+    # 2. checksum
+    try:
+        with open(data_path, "rb") as f:
+            digest = hashlib.sha256(f.read()).hexdigest()
+    except Exception:
+        raise Abstain("data file unreadable")
+    if digest.lower() != str(manifest["file_sha256"]).strip().lower():
+        raise Abstain("sha256 mismatch")
+
+    # units
+    units_txt = json.dumps(manifest["units"]).lower()
+    for bad in ("kilomet", "km", "meter", "cent", "euro", "gbp"):
+        if bad in units_txt and "mile" not in units_txt.replace("kilomet", ""):
+            raise Abstain("unsupported units")
+    if any(b in units_txt for b in ("kilomet", "\"km", " km", "cents")):
+        raise Abstain("unsupported units")
+
+    # 3. row count
+    try:
+        table = pq.read_table(data_path)
+    except Exception:
+        raise Abstain("cannot read parquet")
+    try:
+        expected_rows = int(manifest["row_count"])
+    except Exception:
+        raise Abstain("invalid row_count")
+    if table.num_rows != expected_rows:
+        raise Abstain("row count mismatch")
+    df = table.to_pandas()
+    if len(set(df.columns)) != len(df.columns):
+        raise Abstain("duplicate column names")
+
+    # 4. columns
+    renames = {}
+    for ch in manifest["schema_changes"]:
+        if isinstance(ch, dict) and ch.get("type") == "rename":
+            renames[ch.get("from")] = ch.get("to")
+        else:
+            raise Abstain("unsupported schema change")
+    for src, dst in renames.items():
+        if src in df.columns:
+            if dst in df.columns:
+                raise Abstain("rename target already present")
+    df = df.rename(columns={s: d for s, d in renames.items() if s in df.columns})
+    try:
+        mcols = [renames.get(c["name"], c["name"]) for c in manifest["columns"]]
+    except Exception:
+        raise Abstain("manifest columns malformed")
+    missing = [c for c in mcols if c not in df.columns]
+    if missing:
+        raise Abstain(f"delivered columns disagree with manifest: {missing}")
+    missing = [c for c in REQUIRED if c not in df.columns]
+    if missing:
+        raise Abstain(f"required columns missing: {missing}")
+
+    tz = rp["timezone"] or LOCAL_TZ
+    try:
+        pd.Timestamp("2020-01-01").tz_localize(tz)
+    except Exception:
+        raise Abstain("invalid manifest timezone")
+
+    # required non-null
+    for c in REQUIRED:
+        if df[c].isna().any():
+            raise Abstain(f"nulls in required column {c}")
+
+    # normalize
+    work = pd.DataFrame(index=df.index)
+    work["record_id"] = _to_numeric(df["record_id"], "record_id")
+    work["tpep_pickup_datetime"] = _to_local_naive(df["tpep_pickup_datetime"], tz)
+    if work["tpep_pickup_datetime"].isna().any():
+        raise Abstain("unparseable pickup timestamps")
+    for c in ("trip_distance", "payment_type", "fare_amount"):
+        work[c] = _to_numeric(df[c], c)
+    for c in ("VendorID", "PULocationID", "DOLocationID", "tip_amount", "total_amount"):
+        if c in df.columns:
+            try:
+                work[c] = pd.to_numeric(df[c], errors="raise")
+            except Exception:
+                raise Abstain(f"non-numeric values in {c}")
+    if "tpep_dropoff_datetime" in df.columns:
+        try:
+            work["tpep_dropoff_datetime"] = _to_local_naive(df["tpep_dropoff_datetime"], tz)
+        except Abstain:
+            raise
+
+    for c in ("record_id", "payment_type"):
+        v = work[c].astype("float64") if c != "record_id" else work[c]
+        if c == "record_id":
+            if not pd.api.types.is_integer_dtype(work[c]):
+                if not (work[c] == work[c].round()).all():
+                    raise Abstain("non-integer record_id")
+        elif not ((v == v.round()).all()):
+            raise Abstain("non-integer payment_type")
+
+    # 5. period
+    start = _bound(rp["start"], tz, "start")
+    end = _bound(rp["end"], tz, "end")
+    pk = work["tpep_pickup_datetime"]
+    if ((pk < start) | (pk >= end)).any():
+        raise Abstain("pickup outside reporting period")
+
+    # 6. contract rules
+    pt = work["payment_type"].astype("float64")
+    if not pt.isin([0, 1, 2, 3, 4, 5, 6]).all():
+        raise Abstain("undocumented payment_type code")
+    td = work["trip_distance"].astype("float64")
+    fa = work["fare_amount"].astype("float64")
+    if not (td.map(math.isfinite).all() and fa.map(math.isfinite).all()):
+        raise Abstain("non-finite values")
+    if not ((td > 0) & (td <= 100)).all():
+        raise Abstain("trip_distance out of range")
+    if not ((fa >= 0) & (fa <= 1000)).all():
+        raise Abstain("fare_amount out of range")
+
+    # replay / conflict
+    deduped = work.drop_duplicates()
+    if deduped["record_id"].duplicated().any():
+        raise Abstain("conflicting duplicate record_id")
+    n = len(deduped)
+    if n == 0:
+        raise Abstain("no trips")
+
+    fares = deduped["fare_amount"].astype("float64").tolist()
+    dists = deduped["trip_distance"].astype("float64").tolist()
+    total_fare = math.fsum(fares)
+    metrics = {
+        "trip_count": int(n),
+        "total_fare": float(total_fare),
+        "mean_fare": float(total_fare / n),
+        "mean_trip_distance": float(math.fsum(dists) / n),
+        "card_share": float((deduped["payment_type"].astype("float64") == 1).sum() / n),
+    }
+    return {"status": "ok", "metrics": metrics, "reason": ""}
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        return _analyze(data_path, manifest_path)
+    except Abstain as e:
+        return _abstain(str(e))
+    except Exception as e:
+        return _abstain(f"unexpected error: {type(e).__name__}")
+```

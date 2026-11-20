@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this artifact, please cite the software and the accepted paper."
+title: "PipeShift: benchmark and research artifact for silent errors in LLM-generated analytics code under data-pipeline change"
+version: "1.1.0"
+date-released: "<YYYY-MM-DD: set to the release date at Gate C>"
+license: MIT
+authors:
+  - family-names: Pandey
+    given-names: Satyam Adharchandra
+    affiliation: "Independent Researcher"
+    orcid: "https://orcid.org/0009-0002-9127-6960"
+keywords: ["LLM-generated code", "silent errors", "data validation", "data provenance", "reproducibility", "benchmark"]
+abstract: "Fault-injection benchmark on official NYC TLC data (32 primary scenarios, 3 exploratory held-out scenarios, 120 generations, 46,080 + 4,320 episodes) with prompts, deterministic validators, archived programs, episode-level results and reproduction scripts. The NYC TLC data are not redistributed."
+preferred-citation:
+  type: conference-paper
+  title: "When Data Pipelines Change: A Controlled Evaluation of Silent Errors in LLM-Generated Analytics Code"
+  authors:
+    - family-names: Pandey
+      given-names: Satyam Adharchandra
+      orcid: "https://orcid.org/0009-0002-9127-6960"
+  collection-title: "TrustAI-BD 2026 workshop, IEEE International Conference on Big Data (IEEE BigData 2026)"
+  year: 2026
+  status: in-press

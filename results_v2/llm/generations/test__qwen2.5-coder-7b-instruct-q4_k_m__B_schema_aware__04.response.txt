@@ -1,0 +1,52 @@
+```python
+import pandas as pd
+import pyarrow.parquet as pq
+import numpy as np
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        # Load data
+        df = pq.read_table(data_path).to_pandas()
+
+        # Load manifest
+        with open(manifest_path, 'r') as f:
+            manifest = f.read()
+            # Here you would parse the manifest JSON to get the schema changes
+            # For simplicity, we'll assume the schema is as expected
+
+        # Validate required columns and handle nulls
+        required_columns = {'record_id', 'tpep_pickup_datetime', 'trip_distance', 'payment_type', 'fare_amount'}
+        if not required_columns.issubset(df.columns) or df[required_columns].isnull().values.any():
+            return {"status": "abstain", "metrics": None, "reason": "Missing or null required columns"}
+
+        # Remove duplicates
+        df = df.drop_duplicates()
+
+        # Validate timestamp range
+        if 'manifest' in locals() and 'start' in manifest and 'end' in manifest:
+            start_time = pd.to_datetime(manifest['start'])
+            end_time = pd.to_datetime(manifest['end'])
+            if not (start_time <= df['tpep_pickup_datetime'].min() and df['tpep_pickup_datetime'].max() < end_time):
+                return {"status": "abstain", "metrics": None, "reason": "Trips outside the reporting period"}
+
+        # Calculate metrics
+        trip_count = df.shape[0]
+        total_fare = df['fare_amount'].sum()
+        mean_fare = df['fare_amount'].mean()
+        mean_trip_distance = df['trip_distance'].mean()
+        card_share = (df[df['payment_type'] == 1].shape[0] / trip_count) if trip_count > 0 else 0
+
+        return {
+            "status": "ok",
+            "metrics": {
+                "trip_count": trip_count,
+                "total_fare": total_fare,
+                "mean_fare": mean_fare,
+                "mean_trip_distance": mean_trip_distance,
+                "card_share": card_share
+            },
+            "reason": ""
+        }
+    except Exception as e:
+        return {"status": "abstain", "metrics": None, "reason": str(e)}
+```

@@ -1,0 +1,382 @@
+```python
+"""Monthly summary of NYC TLC yellow taxi trips with defensive validation."""
+
+import hashlib
+import json
+import math
+import os
+import re
+
+import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
+
+REQUIRED = [
+    "record_id", "VendorID", "tpep_pickup_datetime", "tpep_dropoff_datetime",
+    "PULocationID", "DOLocationID", "trip_distance", "payment_type",
+    "fare_amount", "tip_amount", "total_amount",
+]
+ROW_COUNT_KEYS = {
+    "row_count", "num_rows", "n_rows", "rows", "record_count", "records",
+    "num_records", "n_records", "total_rows", "nrows", "rowcount", "trip_count",
+}
+BAD_STATUS = {
+    "incomplete", "partial", "preliminary", "draft", "invalid", "corrupt",
+    "corrupted", "superseded", "deprecated", "retracted", "withdrawn", "failed",
+    "error", "stale", "embargoed", "do_not_use", "pending",
+}
+KM_PER_MILE = 1.609344
+MAX_BAD_FRACTION = 0.01
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": str(reason)[:300]}
+
+
+def _flatten(obj, prefix=""):
+    out = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key = f"{prefix}.{k}" if prefix else str(k)
+            out.append((key.lower(), v))
+            out.extend(_flatten(v, key))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            out.extend(_flatten(v, f"{prefix}[{i}]"))
+    return out
+
+
+def _leaf(key):
+    return re.split(r"[.\[]", key)[-1].rstrip("]")
+
+
+def _file_hash(path, algo):
+    h = hashlib.new(algo)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _check_checksums(flat, data_path):
+    algos = {64: "sha256", 32: "md5", 40: "sha1", 128: "sha512"}
+    for key, val in flat:
+        leaf = _leaf(key)
+        if not isinstance(val, str):
+            continue
+        if not any(t in leaf for t in ("sha", "md5", "checksum", "hash", "digest")):
+            continue
+        v = val.strip().lower()
+        algo_hint = None
+        if ":" in v:
+            algo_hint, v = v.split(":", 1)
+            algo_hint = algo_hint.replace("-", "")
+        if not re.fullmatch(r"[0-9a-f]+", v):
+            continue
+        algo = None
+        for a in ("sha256", "sha512", "sha1", "md5"):
+            if a in leaf.replace("-", "") or algo_hint == a:
+                algo = a
+                break
+        if algo is None:
+            algo = algos.get(len(v))
+        if algo is None:
+            continue
+        # Only compare checksums that plausibly refer to the data file.
+        if any(t in key for t in ("manifest", "schema")):
+            continue
+        if _file_hash(data_path, algo) != v:
+            return f"data file {algo} checksum does not match manifest"
+    return None
+
+
+def _parse_period(flat, manifest):
+    """Return (start, end) Timestamps of the expected month, or None."""
+    cand_keys = ("month", "period", "year_month", "data_month", "yearmonth",
+                 "reporting_period", "coverage_month", "partition")
+    for key, val in flat:
+        leaf = _leaf(key)
+        if leaf in cand_keys and isinstance(val, str):
+            m = re.search(r"(\d{4})[-_/]?(\d{2})", val)
+            if m:
+                y, mo = int(m.group(1)), int(m.group(2))
+                if 1 <= mo <= 12:
+                    s = pd.Timestamp(year=y, month=mo, day=1)
+                    return s, s + pd.offsets.MonthBegin(1)
+    # year + month integers
+    if isinstance(manifest, dict):
+        dicts = [manifest] + [v for v in manifest.values() if isinstance(v, dict)]
+        for d in dicts:
+            lower = {str(k).lower(): v for k, v in d.items()}
+            y, mo = lower.get("year"), lower.get("month")
+            try:
+                y, mo = int(y), int(mo)
+                if 1 <= mo <= 12 and 1900 < y < 2200:
+                    s = pd.Timestamp(year=y, month=mo, day=1)
+                    return s, s + pd.offsets.MonthBegin(1)
+            except (TypeError, ValueError):
+                pass
+    # explicit start/end
+    start = end = None
+    for key, val in flat:
+        leaf = _leaf(key)
+        if not isinstance(val, str):
+            continue
+        if leaf in ("start", "start_date", "period_start", "from", "date_from", "min_pickup"):
+            start = start or val
+        if leaf in ("end", "end_date", "period_end", "to", "date_to", "max_pickup"):
+            end = end or val
+    if start and end:
+        try:
+            s = pd.Timestamp(start).tz_localize(None) if pd.Timestamp(start).tzinfo else pd.Timestamp(start)
+            e = pd.Timestamp(end).tz_localize(None) if pd.Timestamp(end).tzinfo else pd.Timestamp(end)
+            if len(end.strip()) <= 10:  # date-only end treated as inclusive
+                e = e + pd.Timedelta(days=1)
+            if e > s:
+                return s, e
+        except Exception:
+            pass
+    return None
+
+
+def _to_datetime(series):
+    s = series
+    if pd.api.types.is_datetime64_any_dtype(s):
+        out = s
+    elif pd.api.types.is_numeric_dtype(s):
+        med = np.nanmedian(s.astype(float)) if s.notna().any() else 0
+        unit = "s"
+        if med > 1e17:
+            unit = "ns"
+        elif med > 1e14:
+            unit = "us"
+        elif med > 1e11:
+            unit = "ms"
+        out = pd.to_datetime(s, unit=unit, errors="coerce")
+    else:
+        out = pd.to_datetime(s, errors="coerce")
+    try:
+        if getattr(out.dt, "tz", None) is not None:
+            out = out.dt.tz_convert("America/New_York").dt.tz_localize(None)
+    except Exception:
+        pass
+    return out
+
+
+def _unit_settings(flat):
+    """Return (fare_scale, distance_scale) or raise ValueError for unsupported units."""
+    fare_scale, dist_scale = 1.0, 1.0
+    for key, val in flat:
+        if not isinstance(val, str):
+            continue
+        v = val.strip().lower()
+        if "currency" in key:
+            if v not in ("usd", "us$", "$", "us dollar", "us dollars", "dollar", "dollars"):
+                raise ValueError(f"unsupported currency {val!r}")
+        is_fare = any(t in key for t in ("fare", "amount", "money", "monetary"))
+        is_dist = "distance" in key
+        if "unit" not in key and not (is_fare or is_dist):
+            continue
+        if is_fare and ("unit" in key or "currency" in key):
+            if v in ("cents", "cent", "usd_cents", "us cents"):
+                fare_scale = 0.01
+            elif v in ("usd", "dollars", "dollar", "us dollars", "$"):
+                pass
+            elif "unit" in key:
+                raise ValueError(f"unsupported fare unit {val!r}")
+        if is_dist and "unit" in key:
+            if v in ("km", "kilometer", "kilometers", "kilometre", "kilometres"):
+                dist_scale = 1.0 / KM_PER_MILE
+            elif v in ("m", "meter", "meters", "metre", "metres"):
+                dist_scale = 1.0 / (KM_PER_MILE * 1000.0)
+            elif v in ("mi", "mile", "miles"):
+                pass
+            else:
+                raise ValueError(f"unsupported distance unit {val!r}")
+    return fare_scale, dist_scale
+
+
+def _card_codes(flat):
+    """Payment codes meaning credit card; default to TLC standard code 1."""
+    for key, val in flat:
+        if "payment" in key and isinstance(val, dict):
+            codes = set()
+            for k, v in val.items():
+                if isinstance(v, str) and "credit" in v.lower():
+                    codes.add(str(k).strip())
+                elif isinstance(k, str) and "credit" in k.lower() and isinstance(v, (int, str)):
+                    codes.add(str(v).strip())
+            if codes:
+                return codes
+    return {"1"}
+
+
+def _is_card(series, codes):
+    def norm(x):
+        if x is None or (isinstance(x, float) and math.isnan(x)):
+            return None
+        if isinstance(x, (int, np.integer)):
+            return str(int(x))
+        if isinstance(x, (float, np.floating)):
+            return str(int(x)) if float(x).is_integer() else str(x)
+        s = str(x).strip()
+        try:
+            f = float(s)
+            if f.is_integer():
+                return str(int(f))
+        except ValueError:
+            pass
+        return s
+    normed = series.map(norm)
+    lowered = normed.map(lambda s: s.lower() if isinstance(s, str) else s)
+    is_text_card = lowered.map(lambda s: isinstance(s, str) and ("credit" in s or s in ("card", "crd", "cc")))
+    return normed.isin(codes) | is_text_card, normed.isna()
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        return _analyze(data_path, manifest_path)
+    except Exception as exc:  # never raise to caller
+        return _abstain(f"unexpected error: {type(exc).__name__}: {exc}")
+
+
+def _analyze(data_path, manifest_path):
+    if not os.path.isfile(data_path):
+        return _abstain("data file missing")
+    if not os.path.isfile(manifest_path):
+        return _abstain("manifest file missing")
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as exc:
+        return _abstain(f"manifest unreadable: {exc}")
+    flat = _flatten(manifest)
+
+    # Manifest status flags
+    for key, val in flat:
+        leaf = _leaf(key)
+        if leaf in ("status", "state", "quality", "data_status", "validation", "release_status") \
+                and isinstance(val, str) and val.strip().lower().replace(" ", "_") in BAD_STATUS:
+            return _abstain(f"manifest marks data as {val!r}")
+        if leaf in ("valid", "is_valid", "complete", "is_complete", "validated", "passed") and val is False:
+            return _abstain(f"manifest flag {leaf}=false")
+        if leaf in ("deprecated", "superseded", "retracted", "is_partial", "partial",
+                    "incomplete", "preliminary") and val is True:
+            return _abstain(f"manifest flag {leaf}=true")
+
+    msg = _check_checksums(flat, data_path)
+    if msg:
+        return _abstain(msg)
+
+    try:
+        fare_scale, dist_scale = _unit_settings(flat)
+    except ValueError as exc:
+        return _abstain(str(exc))
+
+    try:
+        table = pq.read_table(data_path)
+    except Exception as exc:
+        return _abstain(f"parquet unreadable: {exc}")
+    df = table.to_pandas()
+    n_raw = len(df)
+
+    missing = [c for c in REQUIRED if c not in df.columns]
+    if missing:
+        return _abstain(f"missing columns: {missing}")
+
+    # Manifest-declared columns must be present
+    for key, val in flat:
+        if _leaf(key) in ("columns", "fields") and isinstance(val, list):
+            names = [v if isinstance(v, str) else (v.get("name") if isinstance(v, dict) else None) for v in val]
+            names = [n for n in names if isinstance(n, str)]
+            absent = [n for n in names if n not in df.columns]
+            if names and absent:
+                return _abstain(f"columns declared in manifest absent: {absent[:5]}")
+
+    # Row count check
+    for key, val in flat:
+        if _leaf(key) in ROW_COUNT_KEYS and isinstance(val, (int, float)) and not isinstance(val, bool):
+            if "manifest" in key:
+                continue
+            if int(val) != n_raw:
+                return _abstain(f"row count {n_raw} != manifest {int(val)}")
+            break
+
+    if n_raw == 0:
+        return _abstain("no records")
+
+    # Duplicates
+    df = df.drop_duplicates()
+    if df["record_id"].isna().any():
+        return _abstain("null record_id values")
+    if df["record_id"].duplicated().any():
+        return _abstain("conflicting duplicate record_id values")
+    if (n_raw - len(df)) / n_raw > MAX_BAD_FRACTION:
+        return _abstain("excessive duplicate records")
+
+    # Numeric columns
+    fare = pd.to_numeric(df["fare_amount"], errors="coerce").astype(float) * fare_scale
+    dist = pd.to_numeric(df["trip_distance"], errors="coerce").astype(float) * dist_scale
+    n = len(df)
+    if fare.isna().sum() / n > MAX_BAD_FRACTION or dist.isna().sum() / n > MAX_BAD_FRACTION:
+        return _abstain("too many missing/non-numeric fare or distance values")
+    if np.isinf(fare).any() or np.isinf(dist).any():
+        return _abstain("infinite values in fare or distance")
+    if (dist.dropna() < 0).sum() / n > MAX_BAD_FRACTION:
+        return _abstain("too many negative trip distances")
+    if fare.dropna().abs().max() > 1e6 or dist.dropna().max() > 1e6:
+        return _abstain("implausible fare or distance magnitudes (possible unit problem)")
+
+    # Period check
+    pickup = _to_datetime(df["tpep_pickup_datetime"])
+    if pickup.isna().sum() / n > MAX_BAD_FRACTION:
+        return _abstain("too many unparseable pickup datetimes")
+    period = _parse_period(flat, manifest)
+    keep = pd.Series(True, index=df.index)
+    if period is not None:
+        s, e = period
+        keep = (pickup >= s) & (pickup < e)
+        if (~keep).sum() / n > 0.05:
+            return _abstain("many trips fall outside the manifest period")
+    else:
+        valid = pickup.dropna()
+        if valid.empty:
+            return _abstain("no valid pickup datetimes")
+        ym = valid.dt.to_period("M").value_counts()
+        if ym.iloc[0] / len(valid) < 0.95:
+            return _abstain("data spans multiple months; period ambiguous")
+        mode = ym.index[0]
+        keep = pickup.dt.to_period("M") == mode
+
+    df = df.loc[keep]
+    fare = fare.loc[keep]
+    dist = dist.loc[keep]
+    if len(df) == 0:
+        return _abstain("no trips in period")
+
+    is_card, pay_null = _is_card(df["payment_type"], _card_codes(flat))
+    if pay_null.sum() / len(df) > 0.5:
+        return _abstain("payment_type mostly missing")
+
+    trip_count = int(len(df))
+    total_fare = float(fare.sum(skipna=True))
+    mean_fare = float(fare.mean(skipna=True))
+    mean_dist = float(dist.mean(skipna=True))
+    card_share = float(is_card.sum()) / trip_count
+
+    for v in (total_fare, mean_fare, mean_dist, card_share):
+        if not math.isfinite(v):
+            return _abstain("non-finite metric")
+
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": trip_count,
+            "total_fare": total_fare,
+            "mean_fare": mean_fare,
+            "mean_trip_distance": mean_dist,
+            "card_share": card_share,
+        },
+        "reason": "",
+    }
+```

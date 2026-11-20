@@ -1,0 +1,115 @@
+```python
+import hashlib
+import json
+
+import pyarrow as pa
+import pyarrow.compute as pc
+import pyarrow.parquet as pq
+
+REQUIRED_COLUMNS = ["record_id", "fare_amount", "trip_distance", "payment_type"]
+CREDIT_CARD_CODE = 1  # TLC data dictionary: payment_type 1 = credit card
+
+
+def _abstain(reason):
+    return {"status": "abstain", "metrics": None, "reason": reason}
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def analyze(data_path: str, manifest_path: str) -> dict:
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+    except Exception as exc:
+        return _abstain(f"cannot read manifest: {type(exc).__name__}")
+
+    if not isinstance(manifest, dict):
+        return _abstain("manifest is not a JSON object")
+
+    expected_sha = manifest.get("sha256")
+    expected_rows = manifest.get("row_count")
+    if expected_sha is None and expected_rows is None:
+        return _abstain("manifest has no verifiable integrity field (sha256 or row_count)")
+
+    if expected_rows is not None:
+        if isinstance(expected_rows, bool) or not isinstance(expected_rows, int):
+            return _abstain("manifest row_count is not an integer")
+
+    try:
+        if expected_sha is not None:
+            if not isinstance(expected_sha, str):
+                return _abstain("manifest sha256 is not a string")
+            if _sha256_file(data_path) != expected_sha.strip().lower():
+                return _abstain("data file checksum does not match manifest")
+    except Exception as exc:
+        return _abstain(f"cannot checksum data file: {type(exc).__name__}")
+
+    try:
+        schema_names = pq.read_schema(data_path).names
+    except Exception as exc:
+        return _abstain(f"cannot read parquet schema: {type(exc).__name__}")
+
+    missing = [c for c in REQUIRED_COLUMNS if c not in schema_names]
+    if missing:
+        return _abstain(f"missing required columns: {', '.join(missing)}")
+
+    try:
+        table = pq.read_table(data_path, columns=REQUIRED_COLUMNS)
+    except Exception as exc:
+        return _abstain(f"cannot read parquet data: {type(exc).__name__}")
+
+    n = table.num_rows
+    if n == 0:
+        return _abstain("no trip records")
+
+    if expected_rows is not None and expected_rows != n:
+        return _abstain("row count does not match manifest")
+
+    for col in REQUIRED_COLUMNS:
+        if table.column(col).null_count > 0:
+            return _abstain(f"null values present in {col}")
+
+    try:
+        distinct_ids = pc.count_distinct(table.column("record_id")).as_py()
+    except Exception as exc:
+        return _abstain(f"cannot evaluate record_id uniqueness: {type(exc).__name__}")
+    if distinct_ids != n:
+        return _abstain("duplicate record_id values present")
+
+    try:
+        fare = pc.cast(table.column("fare_amount"), pa.float64())
+        dist = pc.cast(table.column("trip_distance"), pa.float64())
+        payment = pc.cast(table.column("payment_type"), pa.int64())
+    except Exception as exc:
+        return _abstain(f"non-numeric value in required column: {type(exc).__name__}")
+
+    if not pc.all(pc.is_finite(fare)).as_py():
+        return _abstain("non-finite fare_amount values present")
+    if not pc.all(pc.is_finite(dist)).as_py():
+        return _abstain("non-finite trip_distance values present")
+
+    total_fare = float(pc.sum(fare).as_py())
+    mean_fare = float(pc.mean(fare).as_py())
+    mean_trip_distance = float(pc.mean(dist).as_py())
+
+    card_trips = int(pc.sum(pc.cast(pc.equal(payment, CREDIT_CARD_CODE), pa.int64())).as_py())
+    card_share = card_trips / n
+
+    return {
+        "status": "ok",
+        "metrics": {
+            "trip_count": n,
+            "total_fare": total_fare,
+            "mean_fare": mean_fare,
+            "mean_trip_distance": mean_trip_distance,
+            "card_share": card_share,
+        },
+        "reason": "",
+    }
+```
